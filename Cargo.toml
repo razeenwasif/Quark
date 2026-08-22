@@ -1,0 +1,131 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/quark-app",
+    "crates/quark-core",
+    "crates/quark-pdf",
+    "crates/quark-ui",
+    "crates/quark-shell",
+    "xtask",
+]
+
+# xtask drives the build from the Linux side; compiling it with the Windows
+# toolchain is pure waste. Excluding it here keeps the Windows build to the
+# crates that actually ship, while `cargo xtask ...` still resolves by name.
+default-members = [
+    "crates/quark-app",
+    "crates/quark-core",
+    "crates/quark-pdf",
+    "crates/quark-ui",
+    "crates/quark-shell",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/razeenwasif/quark"
+
+[workspace.dependencies]
+# --- internal ---
+quark-core = { path = "crates/quark-core" }
+quark-pdf = { path = "crates/quark-pdf" }
+quark-ui = { path = "crates/quark-ui" }
+quark-shell = { path = "crates/quark-shell" }
+
+# --- ui ---
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+    "persistence",
+    "x11",
+    "wayland",
+] }
+egui_extras = { version = "0.36", features = ["image"] }
+
+# --- pdf engine ---
+# PDFium renders; lopdf performs structural surgery. The split is deliberate:
+# PDFium is a renderer with a thin writing API, and lopdf is an object model
+# with no renderer. Page organisation, encryption and metadata go through
+# lopdf; everything on screen comes from PDFium.
+# Pinned to PDFium build 7543, which is the newest ABI this crate declares
+# bindings for. The vendored DLL/so under vendor/ is that exact build: the
+# FPDF_* ABI is not stable across Chromium rolls, and a mismatched pair fails
+# as memory corruption at runtime rather than as a link error.
+# The `bindings` feature is deliberately absent. It makes the build script
+# re-run rust-bindgen over PDFium's headers and overwrite the crate's own
+# checked-in bindings; on MSVC bindgen types the FPDF_RENDERER_TYPE enum as
+# `c_int` while the crate's config.rs declares it `c_uint`, so the crate stops
+# compiling for Windows. The checked-in bindings are what we want anyway.
+pdfium-render = { version = "0.9", default-features = false, features = [
+    "pdfium_7543",
+    "image_025",
+    "thread_safe",
+] }
+# default-features is off deliberately: lopdf's default set enables its `time`
+# integration, whose datetime.rs does not compile against the current `time`
+# crate (it references FormatItem::StringLiteral, removed upstream). We only
+# need one date backend, so chrono is selected and `time` left out.
+lopdf = { version = "0.44", default-features = false, features = [
+    "chrono",
+    "embed_image",
+    "font_embedding",
+    "rayon",
+    "serde",
+] }
+
+# --- concurrency ---
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+rayon = "1.10"
+
+# --- serialization / storage ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+
+# --- imaging ---
+image = { version = "0.25", default-features = false, features = [
+    "png", "jpeg", "bmp", "tiff", "webp",
+] }
+
+# --- search ---
+nucleo-matcher = "0.3"
+memchr = "2"
+
+# --- dialogs ---
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+
+# --- misc ---
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sha2 = "0.10"
+base64 = "0.22"
+dirs = "6"
+
+# --- diagnostics ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+
+# --- windows ---
+windows = "0.62"
+windows-core = "0.62"
+
+# Release builds: this is a document viewer whose pitch is that it opens
+# instantly, so the extra link time is worth it.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
+
+# Dev builds are unusably slow for a GUI app unless dependencies are optimised.
+# Our own crates stay at opt-level 0 so incremental rebuilds stay fast.
+[profile.dev]
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 3

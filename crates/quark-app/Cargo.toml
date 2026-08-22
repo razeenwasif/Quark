@@ -1,0 +1,29 @@
+[package]
+name = "quark-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "quark"
+path = "src/main.rs"
+
+[dependencies]
+quark-core.workspace = true
+quark-pdf.workspace = true
+quark-ui.workspace = true
+egui.workspace = true
+eframe.workspace = true
+rfd.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+dirs.workspace = true
+image.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+quark-shell.workspace = true
