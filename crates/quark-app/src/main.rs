@@ -1,8 +1,22 @@
 //! Quark — a PDF reader and editor.
+//!
+//! Release builds target the Windows GUI subsystem, so double-clicking a PDF
+//! does not open an empty console behind the window. Debug builds keep the
+//! console, because that is where `QUARK_LOG` tracing output goes and losing it
+//! during development costs more than the stray window.
+//!
+//! A GUI-subsystem process has no stdio of its own, so the command-line flags
+//! below borrow the parent terminal's console — see `attach_parent_console`.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod assistant;
 mod chrome;
 mod dialogs;
+mod home;
+/// Quark's application icon, shared with `build.rs` so the pinned Explorer
+/// icon and the runtime window icon are generated from one definition.
+mod icon;
 mod panels;
 mod shortcuts;
 mod tab;
@@ -18,6 +32,7 @@ use std::path::PathBuf;
 /// before the window is created so that `--register` can run headless.
 struct Args {
     files: Vec<PathBuf>,
+    install: bool,
     register: bool,
     unregister: bool,
     print: Option<PathBuf>,
@@ -28,6 +43,7 @@ struct Args {
 fn parse_args(argv: impl Iterator<Item = String>) -> Args {
     let mut a = Args {
         files: Vec::new(),
+        install: false,
         register: false,
         unregister: false,
         print: None,
@@ -37,6 +53,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Args {
     let mut it = argv.peekable();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--install" => a.install = true,
             "--register" => a.register = true,
             "--unregister" => a.unregister = true,
             "--print" => {
@@ -64,7 +81,8 @@ USAGE:
     quark [OPTIONS] [FILE...]
 
 OPTIONS:
-    --register       Register Quark as a PDF handler for the current user
+    --install        Install Quark for the current user and register it
+    --register       Register Quark where it stands, without installing
     --unregister     Remove Quark's file associations
     --print <FILE>   Print a document and exit
     -h, --help       Show this message
@@ -72,14 +90,23 @@ OPTIONS:
 ";
 
 fn main() -> eframe::Result<()> {
+    let args = parse_args(std::env::args().skip(1));
+
+    // Every path below this point that writes to stdout or stderr needs a
+    // console to write to, and a GUI-subsystem process has none of its own.
+    // Only the flag paths print, so the GUI never borrows a console and never
+    // makes a stray window appear.
+    #[cfg(windows)]
+    if args.help || args.version || args.install || args.register || args.unregister || args.print.is_some() {
+        quark_shell::attach_parent_console();
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("QUARK_LOG")
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
         .init();
-
-    let args = parse_args(std::env::args().skip(1));
 
     if args.help {
         print!("{HELP}");
@@ -92,6 +119,23 @@ fn main() -> eframe::Result<()> {
 
     #[cfg(windows)]
     {
+        if args.install {
+            return match quark_shell::install() {
+                Ok(dir) => {
+                    println!("Quark is installed in {}", dir.display());
+                    println!("It now appears in Open With and in Settings ▸ Default apps.");
+                    println!(
+                        "Pin the copy in that folder, not the one you built — \
+                         cleaning the build directory cannot break it."
+                    );
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("Install failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+        }
         if args.register {
             return match quark_shell::register() {
                 Ok(()) => {
@@ -128,7 +172,7 @@ fn main() -> eframe::Result<()> {
     }
     #[cfg(not(windows))]
     {
-        if args.register || args.unregister || args.print.is_some() {
+        if args.install || args.register || args.unregister || args.print.is_some() {
             eprintln!("quark: file association and printing are Windows-only");
             std::process::exit(1);
         }
@@ -152,32 +196,19 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// The window and taskbar icon.
+/// The window and taskbar icon of the *running* process.
 ///
-/// Drawn rather than loaded from a file so the binary stays self-contained and
-/// cannot start up without its icon.
+/// This is only half the story: a pinned shortcut is drawn by Explorer from
+/// the icon resource `build.rs` compiles into the executable, not from this.
+/// Both come from [`icon::render`] so they cannot disagree.
 fn load_icon() -> egui::IconData {
-    const S: usize = 64;
-    let mut rgba = vec![0u8; S * S * 4];
-    let c = (S as f32 - 1.0) / 2.0;
-    for y in 0..S {
-        for x in 0..S {
-            let (dx, dy) = (x as f32 - c, y as f32 - c);
-            let d = (dx * dx + dy * dy).sqrt();
-            let i = (y * S + x) * 4;
-            // A purple disc with a soft edge, matching the accent colour.
-            let a = ((28.0 - d) / 3.0).clamp(0.0, 1.0);
-            let t = (d / 28.0).clamp(0.0, 1.0);
-            rgba[i] = (0xC0 as f32 * (1.0 - t) + 0x7E as f32 * t) as u8;
-            rgba[i + 1] = (0x84 as f32 * (1.0 - t) + 0x22 as f32 * t) as u8;
-            rgba[i + 2] = (0xFC as f32 * (1.0 - t) + 0xCE as f32 * t) as u8;
-            rgba[i + 3] = (a * 255.0) as u8;
-        }
-    }
+    // 128 rather than 64: Windows scales the taskbar icon up on high-DPI
+    // displays, and upscaling a 64px source is visibly soft.
+    const S: u32 = 128;
     egui::IconData {
-        rgba,
-        width: S as u32,
-        height: S as u32,
+        rgba: icon::render(S as usize),
+        width: S,
+        height: S,
     }
 }
 
@@ -203,6 +234,18 @@ mod tests {
         assert_eq!(a.files.len(), 3);
     }
 
+
+    #[test]
+    fn install_is_recognised_and_distinct_from_register() {
+        // They are different operations: --install copies to a stable location
+        // and registers that, --register registers wherever the binary stands.
+        let a = args(&["--install"]);
+        assert!(a.install);
+        assert!(!a.register, "--install must not imply --register");
+        let b = args(&["--register"]);
+        assert!(b.register);
+        assert!(!b.install);
+    }
     #[test]
     fn registration_flags_are_recognised() {
         assert!(args(&["--register"]).register);
@@ -236,6 +279,35 @@ mod tests {
         assert!(args(&["--version"]).version);
     }
 
+
+    #[test]
+    fn the_icon_survives_every_size_windows_asks_for() {
+        // The `.ico` ships all of these, and 16px is the real test: every
+        // dimension is a fraction of the size, so at that scale a bond or a
+        // dot can round away to nothing or flood the whole tile.
+        for size in icon::ICO_SIZES {
+            let s = size as usize;
+            let rgba = icon::render(s);
+            assert_eq!(rgba.len(), s * s * 4, "{size}px is the wrong length");
+
+            let centre = ((s / 2) * s + s / 2) * 4;
+            assert_eq!(rgba[centre + 3], 255, "{size}px centre is not solid");
+            assert_eq!(rgba[3], 0, "{size}px corner is not transparent");
+
+            // Still a mark rather than a flat slab. This is what "reads at
+            // 16px" has to mean in a test.
+            let shades: std::collections::HashSet<_> = rgba
+                .chunks_exact(4)
+                .filter(|px| px[3] == 255)
+                .map(|px| (px[0] / 32, px[1] / 32, px[2] / 32))
+                .collect();
+            assert!(
+                shades.len() >= 3,
+                "{size}px rendered only {} distinct shades",
+                shades.len()
+            );
+        }
+    }
     #[test]
     fn the_icon_is_the_size_it_claims() {
         let icon = load_icon();
@@ -248,7 +320,77 @@ mod tests {
         let icon = load_icon();
         let s = icon.width as usize;
         let centre = ((s / 2) * s + s / 2) * 4;
-        assert_eq!(icon.rgba[centre + 3], 255, "the disc should be solid");
+        assert_eq!(icon.rgba[centre + 3], 255, "the tile should be solid");
         assert_eq!(icon.rgba[3], 0, "the corner should be transparent");
+    }
+
+    /// Samples the icon at a point given as a fraction of its size.
+    fn icon_pixel(icon: &egui::IconData, fx: f32, fy: f32) -> [u8; 4] {
+        let s = icon.width as usize;
+        let x = ((fx * s as f32) as usize).min(s - 1);
+        let y = ((fy * s as f32) as usize).min(s - 1);
+        let i = (y * s + x) * 4;
+        [
+            icon.rgba[i],
+            icon.rgba[i + 1],
+            icon.rgba[i + 2],
+            icon.rgba[i + 3],
+        ]
+    }
+
+    #[test]
+    fn the_three_quarks_are_three_different_colours() {
+        // A triplet that renders in one colour is a smudge at taskbar size,
+        // which is the whole reason the dots are not brand purple.
+        let icon = load_icon();
+        // Matches the -90/30/150 degree placement at 0.2 of the icon size.
+        let top = icon_pixel(&icon, 0.5, 0.5 - 0.2);
+        let lower_right = icon_pixel(&icon, 0.5 + 0.173, 0.5 + 0.1);
+        let lower_left = icon_pixel(&icon, 0.5 - 0.173, 0.5 + 0.1);
+
+        for (name, px) in [
+            ("top", top),
+            ("lower right", lower_right),
+            ("lower left", lower_left),
+        ] {
+            assert_eq!(px[3], 255, "the {name} quark should be opaque");
+        }
+        // Each quark leads on a different channel: pink, green, blue.
+        assert!(top[0] > top[1] && top[0] > top[2], "top: {top:?}");
+        assert!(
+            lower_right[1] > lower_right[0] && lower_right[1] > lower_right[2],
+            "lower right: {lower_right:?}"
+        );
+        assert!(
+            lower_left[2] > lower_left[0] && lower_left[2] > lower_left[1],
+            "lower left: {lower_left:?}"
+        );
+    }
+
+    #[test]
+    fn the_icon_is_a_tile_not_a_disc() {
+        // The corners are rounded but the edge midpoints are not, which is what
+        // separates this silhouette from the plain disc it replaced.
+        let icon = load_icon();
+        let edge_middle = icon_pixel(&icon, 0.5, 0.06);
+        assert_eq!(edge_middle[3], 255, "the top edge should be solid tile");
+        let corner = icon_pixel(&icon, 0.06, 0.06);
+        assert_eq!(corner[3], 0, "the corner should be cut away");
+    }
+
+    #[test]
+    fn the_icon_has_no_premultiplied_fringe() {
+        // Un-premultiplying with a zero alpha divides by zero; a fringe of
+        // black-but-transparent pixels is how that shows up.
+        let icon = load_icon();
+        for px in icon.rgba.chunks_exact(4) {
+            if px[3] == 0 {
+                assert_eq!(
+                    [px[0], px[1], px[2]],
+                    [0, 0, 0],
+                    "transparent pixel carries colour: {px:?}"
+                );
+            }
+        }
     }
 }

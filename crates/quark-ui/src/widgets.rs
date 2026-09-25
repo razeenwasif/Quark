@@ -181,6 +181,162 @@ pub fn elide(text: &str, max_chars: usize, keep_tail: bool) -> String {
     }
 }
 
+
+/// A tool button on the dark rail.
+///
+/// Separate from [`tool_button`] because the rail is dark in both themes: the
+/// panel-tuned hover and icon colours are invisible against it.
+pub fn rail_button(
+    ui: &mut Ui,
+    p: &Palette,
+    icon: Icon,
+    tooltip: &str,
+    active: bool,
+    enabled: bool,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered() && enabled;
+        let painter = ui.painter();
+        if active {
+            // A tinted plate rather than a solid fill: the rail is already
+            // dark, so a solid accent would shout.
+            painter.rect_filled(
+                rect,
+                CornerRadius::same(RADIUS_CONTROL),
+                Color32::from_rgba_unmultiplied(p.accent.r(), p.accent.g(), p.accent.b(), 0x2b),
+            );
+        } else if hovered {
+            painter.rect_filled(
+                rect,
+                CornerRadius::same(RADIUS_CONTROL),
+                Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0x12),
+            );
+        }
+        let color = if !enabled {
+            Color32::from_rgba_unmultiplied(p.rail_icon.r(), p.rail_icon.g(), p.rail_icon.b(), 0x66)
+        } else if active {
+            p.accent_text
+        } else {
+            p.rail_icon
+        };
+        icons::draw(painter, rect.shrink(7.0), icon, color);
+    }
+    if enabled {
+        response.on_hover_text(tooltip)
+    } else {
+        response
+    }
+}
+
+/// The document name at the head of the nav sidebar.
+pub fn nav_title(ui: &mut Ui, p: &Palette, title: &str) {
+    ui.horizontal(|ui| {
+        let (badge, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+        if ui.is_rect_visible(badge) {
+            let painter = ui.painter();
+            painter.rect_filled(badge, CornerRadius::same(5), p.accent_soft);
+            painter.text(
+                badge.center(),
+                egui::Align2::CENTER_CENTER,
+                "PDF",
+                egui::FontId::proportional(8.0),
+                p.accent_text,
+            );
+        }
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(title).size(12.5).strong().color(p.text));
+    });
+}
+
+/// One entry in the nav sidebar.
+pub fn nav_item(ui: &mut Ui, p: &Palette, icon: Icon, label: &str, active: bool) -> Response {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if active {
+            painter.rect_filled(rect, CornerRadius::same(RADIUS_CONTROL), p.accent_soft);
+        } else if response.hovered() {
+            painter.rect_filled(rect, CornerRadius::same(RADIUS_CONTROL), p.card_hover);
+        }
+        let color = if active { p.accent_text } else { p.text_muted };
+        let icon_rect = Rect::from_min_size(rect.left_top() + vec2(8.0, 7.0), vec2(16.0, 16.0));
+        icons::draw(painter, icon_rect, icon, color);
+        painter.text(
+            rect.left_center() + vec2(32.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(12.5),
+            color,
+        );
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The document identity chip at the left of the toolbar: a type badge, the
+/// filename, and the folder it came from underneath.
+///
+/// The folder is the disambiguator — two documents called `invoice.pdf` are
+/// only told apart by where they live.
+pub fn file_chip(ui: &mut Ui, p: &Palette, name: &str, folder: &str) {
+    let (rect, _) = ui.allocate_exact_size(vec2(190.0, 30.0), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter();
+    let badge = Rect::from_min_size(rect.left_top() + vec2(0.0, 3.0), Vec2::splat(24.0));
+    painter.rect_filled(badge, CornerRadius::same(5), p.accent_soft);
+    painter.text(
+        badge.center(),
+        egui::Align2::CENTER_CENTER,
+        "PDF",
+        egui::FontId::proportional(8.0),
+        p.accent_text,
+    );
+    // Two lines when there is a folder, one centred line when there is not.
+    if folder.is_empty() {
+        painter.text(
+            rect.left_center() + vec2(32.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            name,
+            egui::FontId::proportional(12.5),
+            p.text,
+        );
+    } else {
+        painter.text(
+            rect.left_top() + vec2(32.0, 3.0),
+            egui::Align2::LEFT_TOP,
+            name,
+            egui::FontId::proportional(12.5),
+            p.text,
+        );
+        painter.text(
+            rect.left_top() + vec2(32.0, 17.0),
+            egui::Align2::LEFT_TOP,
+            folder,
+            egui::FontId::proportional(10.5),
+            p.text_faint,
+        );
+    }
+}
+
+/// Groups related controls inside a hairline capsule.
+///
+/// The reference gathers page navigation and zoom into two such capsules; the
+/// border is what makes each read as one control rather than as loose buttons.
+pub fn pill<R>(ui: &mut Ui, p: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
+    egui::Frame::new()
+        .stroke(Stroke::new(1.0, p.border))
+        .corner_radius(CornerRadius::same(RADIUS_CONTROL))
+        .inner_margin(egui::Margin::symmetric(4, 1))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            add(ui)
+        })
+        .inner
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

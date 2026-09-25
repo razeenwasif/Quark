@@ -24,6 +24,18 @@ pub(crate) struct Toast {
     pub(crate) ttl: f32,
 }
 
+/// What the right-hand dock is showing.
+///
+/// Comments and the assistant share a column because they are the same kind of
+/// thing — a conversation about the document, as opposed to the structural
+/// panels (thumbnails, outline, fields) which live in the left nav.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Dock {
+    #[default]
+    Comments,
+    Assistant,
+}
+
 pub struct App {
     pub(crate) service: PdfService,
     pub(crate) tabs: Vec<Tab>,
@@ -43,6 +55,14 @@ pub struct App {
     pub(crate) search_token: u64,
     /// Files waiting to be opened once the engine reports ready.
     pub(crate) startup_files: Vec<PathBuf>,
+    /// Which panel the right-hand dock shows, and whether it is open at all.
+    pub(crate) dock: Dock,
+    pub(crate) dock_open: bool,
+    /// The assistant: conversation state, the worker, and the composer.
+    pub(crate) ai: crate::assistant::Assistant,
+    /// The home screen. Always first in the tab strip, whether or not it is
+    /// the surface currently showing.
+    pub(crate) home: crate::home::HomeState,
 }
 
 impl App {
@@ -75,6 +95,10 @@ impl App {
             palette_query: String::new(),
             search_token: 0,
             startup_files: files,
+            ai: crate::assistant::Assistant::new(),
+            dock: Dock::default(),
+            dock_open: true,
+            home: crate::home::HomeState::default(),
         };
 
         let pending = std::mem::take(&mut app.startup_files);
@@ -88,12 +112,61 @@ impl App {
         Palette::for_mode(self.theme)
     }
 
+    /// The document on screen, if one is.
+    ///
+    /// Home deliberately reports `None` even when documents are open behind
+    /// it. Every command handler already treats "no document" as "do nothing",
+    /// so this is what stops Ctrl+S on the home screen from silently saving
+    /// whichever file happens to be in the background — the guard lives here
+    /// once instead of at sixty-odd call sites. `command_enabled` reads the
+    /// same signal, so the menu and the command palette grey themselves out to
+    /// match. The few handlers that reach for `self.active` directly rather
+    /// than through here guard on `home.visible` themselves.
     pub(crate) fn tab(&self) -> Option<&Tab> {
+        if self.home.visible {
+            return None;
+        }
         self.tabs.get(self.active)
     }
 
     pub(crate) fn tab_mut(&mut self) -> Option<&mut Tab> {
+        if self.home.visible {
+            return None;
+        }
         self.tabs.get_mut(self.active)
+    }
+
+    /// Switches to home, keeping `active` where it was so leaving home again
+    /// returns to the document the user was last reading.
+    pub(crate) fn show_home(&mut self) {
+        self.home.visible = true;
+    }
+
+    /// Where the visible surface sits in the tab strip. Home is slot 0 and
+    /// documents follow it, which is the order they are drawn in.
+    pub(crate) fn strip_position(&self) -> usize {
+        if self.home.visible {
+            0
+        } else {
+            self.active + 1
+        }
+    }
+
+    /// Selects a slot of the tab strip, counting home as slot 0.
+    pub(crate) fn select_strip_position(&mut self, slot: usize) {
+        match slot {
+            0 => self.show_home(),
+            n => self.show_tab(n - 1),
+        }
+        self.textures.clear();
+    }
+
+    /// Switches to a document, leaving home if it was showing.
+    pub(crate) fn show_tab(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.home.visible = false;
+            self.active = index;
+        }
     }
 
     pub(crate) fn toast(&mut self, text: impl Into<String>, error: bool) {
@@ -118,7 +191,7 @@ impl App {
             .iter()
             .position(|t| t.path().map(|p| p.as_path()) == Some(path))
         {
-            self.active = i;
+            self.show_tab(i);
             return;
         }
         let id = self.service.new_doc_id();
@@ -154,8 +227,10 @@ impl App {
                 confirm_label: "Discard Changes".into(),
                 danger: true,
             });
-            // The confirmation applies to the active tab, so make it active.
-            self.active = index;
+            // The confirmation applies to the active tab, so make it active —
+            // and visible, or the dialog would name a document that is not on
+            // screen.
+            self.show_tab(index);
             return;
         }
         self.force_close_tab(index);
@@ -171,6 +246,11 @@ impl App {
         self.textures.clear();
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
+        }
+        // Closing the last document lands on home rather than on a blank
+        // window — that is the point of home being a tab.
+        if self.tabs.is_empty() {
+            self.show_home();
         }
     }
 
@@ -289,7 +369,10 @@ impl App {
 
                     let go_to = tab.current_page;
                     self.tabs.push(tab);
-                    self.active = self.tabs.len() - 1;
+                    // Before the `go_to` below: `tab_mut` reports `None` while
+                    // home is showing, so restoring the reading position has
+                    // to happen after the new document is the visible one.
+                    self.show_tab(self.tabs.len() - 1);
                     if go_to > 0 {
                         if let Some(t) = self.tab_mut() {
                             t.go_to_page(go_to);
@@ -552,6 +635,33 @@ mod tests {
     use quark_core::layout::{PageMode, ZoomMode};
     use quark_core::prefs::{PageTint, SidePanel};
 
+
+    #[test]
+    fn a_settings_file_written_before_the_dock_existed_still_loads() {
+        // Every field carries a serde default precisely so an older file does
+        // not reset the user's whole configuration. Adding `dock_width` is the
+        // first new field since the redesign, so this checks the mechanism
+        // rather than trusting it.
+        let old = "side_panel_width = 300.0\nshow_toolbar = false\n";
+        let p: Prefs = toml::from_str(old).expect("an older settings file must still parse");
+        assert_eq!(p.side_panel_width, 300.0, "existing values are kept");
+        assert!(!p.show_toolbar);
+        assert_eq!(
+            p.dock_width,
+            Prefs::default().dock_width,
+            "a missing dock width falls back to the default"
+        );
+    }
+
+    #[test]
+    fn the_dock_width_survives_a_round_trip() {
+        let p = Prefs {
+            dock_width: 341.0,
+            ..Prefs::default()
+        };
+        let back: Prefs = toml::from_str(&toml::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.dock_width, 341.0);
+    }
     #[test]
     fn preferences_round_trip_through_toml() {
         // This is what makes settings survive a restart.

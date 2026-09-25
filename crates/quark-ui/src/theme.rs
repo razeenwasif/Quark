@@ -1,14 +1,15 @@
 //! Quark's design system.
 //!
-//! The chrome is the same purple glass as Neutron, so the two read as one
-//! family. The **document canvas is deliberately different**: a page is a large
-//! white rectangle, and floating it over drifting coloured light makes the
-//! light appear to bleed into the paper. So the canvas is a flat, neutral,
-//! slightly cool grey — the colour a lightbox has — and the glass is kept to
-//! the toolbars, panels and overlays around it.
+//! Flat, not glass. Panels are opaque and sit flush against each other,
+//! separated by a single hairline; there is no lit ground behind them and
+//! nothing floats. Depth comes from the hierarchy of the fills — rail, nav,
+//! panel, canvas — rather than from translucency and shadow.
 //!
-//! Contrast is checked against the canvas rather than the ground, because that
-//! is what most of the chrome actually sits next to.
+//! The **page is paper, not chrome**. It stays white in both themes and its
+//! own colours never follow the palette, or a dark theme would print light
+//! text onto white paper.
+//!
+//! Contrast is checked against the panel fill a token actually sits on.
 
 use egui::{Color32, CornerRadius, Stroke, Visuals};
 
@@ -35,6 +36,13 @@ impl ThemeMode {
 /// Semantic colour tokens, named by role rather than by appearance.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
+    /// The far-left tool rail. Dark in both themes — it is the app frame, not
+    /// a surface, and the reference keeps it constant while everything else
+    /// flips.
+    pub rail: Color32,
+    /// Inactive icon on the rail. Cannot be `text_muted`: that is tuned for a
+    /// panel fill, and on the dark rail it disappears in the light theme.
+    pub rail_icon: Color32,
     /// Window ground, behind everything.
     pub ground: Color32,
     /// The scrolling document canvas that pages sit on.
@@ -79,66 +87,78 @@ pub struct Palette {
 
 impl Palette {
     pub const DARK: Palette = Palette {
-        ground: Color32::from_rgb(0x0c, 0x07, 0x14),
-        // Distinctly lighter than the ground so a page reads as lit, but far
-        // enough from white that the page itself is still the brightest thing
-        // on screen.
-        canvas: Color32::from_rgb(0x1a, 0x16, 0x24),
-        card: Color32::from_rgba_unmultiplied_const(0x28, 0x1f, 0x3c, 0xd8),
-        card_hover: Color32::from_rgba_unmultiplied_const(0x33, 0x28, 0x4a, 0xe8),
-        popover: Color32::from_rgb(0x25, 0x1d, 0x36),
-        border: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0x1c),
-        highlight: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0x24),
+        rail: Color32::from_rgb(0x13, 0x13, 0x16),
+        rail_icon: Color32::from_rgb(0x7e, 0x7e, 0x88),
+        // Flat, not glass. The redesign puts opaque panels edge to edge and
+        // separates them with a hairline, so there is no lit ground behind
+        // them and nothing for a translucent fill to pick up.
+        ground: Color32::from_rgb(0x0f, 0x0f, 0x12),
+        // The canvas a page sits on. Far below the paper so a white page is
+        // unmistakably the brightest thing on screen.
+        canvas: Color32::from_rgb(0x0f, 0x0f, 0x12),
 
-        text: Color32::from_rgb(0xf2, 0xee, 0xfa),
-        text_muted: Color32::from_rgb(0xb0, 0xa5, 0xc4),
-        text_faint: Color32::from_rgb(0x7d, 0x72, 0x91),
+        // Opaque: a panel that lets the canvas through puts document pixels
+        // behind toolbar text.
+        card: Color32::from_rgb(0x1c, 0x1c, 0x21),
+        card_hover: Color32::from_rgb(0x23, 0x23, 0x29),
+        popover: Color32::from_rgb(0x1c, 0x1c, 0x21),
+        // The hairline that does all the separating now that panels are flat.
+        border: Color32::from_rgb(0x2c, 0x2c, 0x33),
+        highlight: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0x0e),
+
+        text: Color32::from_rgb(0xea, 0xea, 0xef),
+        text_muted: Color32::from_rgb(0x9d, 0x9d, 0xa8),
+        text_faint: Color32::from_rgb(0x6d, 0x6d, 0x78),
 
         accent: Color32::from_rgb(0xa8, 0x55, 0xf7),
-        accent_soft: Color32::from_rgba_unmultiplied_const(0xa8, 0x55, 0xf7, 0x3a),
+        accent_soft: Color32::from_rgba_unmultiplied_const(0xc0, 0x84, 0xfc, 0x2b),
         accent_text: Color32::from_rgb(0xc0, 0x84, 0xfc),
 
         warning: Color32::from_rgb(0xfb, 0xbf, 0x24),
         error: Color32::from_rgb(0xfb, 0x71, 0x85),
         success: Color32::from_rgb(0x4a, 0xde, 0x80),
 
-        page_shadow: Color32::from_black_alpha(0x8c),
-        page_border: Color32::from_rgba_unmultiplied_const(0x00, 0x00, 0x00, 0x60),
-        selection: Color32::from_rgba_unmultiplied_const(0x3b, 0x82, 0xf6, 0x59),
+        page_shadow: Color32::from_black_alpha(0x9c),
+        page_border: Color32::from_rgba_unmultiplied_const(0x00, 0x00, 0x00, 0x80),
+        selection: Color32::from_rgba_unmultiplied_const(0x7c, 0x5c, 0xff, 0x59),
         search_current: Color32::from_rgba_unmultiplied_const(0xf9, 0x73, 0x16, 0x99),
         search_other: Color32::from_rgba_unmultiplied_const(0xfb, 0xbf, 0x24, 0x66),
-        field_highlight: Color32::from_rgba_unmultiplied_const(0x3b, 0x82, 0xf6, 0x33),
+        field_highlight: Color32::from_rgba_unmultiplied_const(0x6c, 0x8c, 0xff, 0x33),
         field_required: Color32::from_rgba_unmultiplied_const(0xfb, 0x71, 0x85, 0x3d),
     };
 
     pub const LIGHT: Palette = Palette {
-        ground: Color32::from_rgb(0xef, 0xea, 0xf6),
-        // A shade darker than the page, so a white page still stands off it.
-        canvas: Color32::from_rgb(0xd6, 0xd1, 0xe0),
-        card: Color32::from_rgba_unmultiplied_const(0xfc, 0xfa, 0xff, 0xe6),
-        card_hover: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0xf2),
+        rail: Color32::from_rgb(0x1c, 0x1c, 0x1f),
+        rail_icon: Color32::from_rgb(0x8b, 0x8b, 0x93),
+        ground: Color32::from_rgb(0xf4, 0xf4, 0xf1),
+        // Deliberately a shade darker than it looks in the reference: a white
+        // page has to stand off the canvas without a border doing the work,
+        // and anything lighter than this drops below the 1.2:1 the test wants.
+        canvas: Color32::from_rgb(0xea, 0xea, 0xe5),
+        card: Color32::from_rgb(0xff, 0xff, 0xff),
+        card_hover: Color32::from_rgb(0xf5, 0xf5, 0xf1),
         popover: Color32::from_rgb(0xff, 0xff, 0xff),
-        border: Color32::from_rgba_unmultiplied_const(0x2a, 0x1b, 0x40, 0x24),
-        highlight: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0xcc),
+        border: Color32::from_rgb(0xe6, 0xe6, 0xe1),
+        highlight: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0x00),
 
-        text: Color32::from_rgb(0x1e, 0x16, 0x2c),
-        text_muted: Color32::from_rgb(0x5c, 0x51, 0x70),
-        text_faint: Color32::from_rgb(0x8b, 0x81, 0x9c),
+        text: Color32::from_rgb(0x18, 0x18, 0x1b),
+        text_muted: Color32::from_rgb(0x6b, 0x6b, 0x74),
+        text_faint: Color32::from_rgb(0x9a, 0x9a, 0xa2),
 
         accent: Color32::from_rgb(0x93, 0x33, 0xea),
-        accent_soft: Color32::from_rgba_unmultiplied_const(0x93, 0x33, 0xea, 0x2e),
+        accent_soft: Color32::from_rgba_unmultiplied_const(0x93, 0x33, 0xea, 0x1f),
         accent_text: Color32::from_rgb(0x7e, 0x22, 0xce),
 
         warning: Color32::from_rgb(0xb4, 0x53, 0x09),
         error: Color32::from_rgb(0xbe, 0x12, 0x3c),
         success: Color32::from_rgb(0x15, 0x80, 0x3d),
 
-        page_shadow: Color32::from_black_alpha(0x33),
-        page_border: Color32::from_rgba_unmultiplied_const(0x2a, 0x1b, 0x40, 0x33),
-        selection: Color32::from_rgba_unmultiplied_const(0x3b, 0x82, 0xf6, 0x4d),
+        page_shadow: Color32::from_black_alpha(0x26),
+        page_border: Color32::from_rgba_unmultiplied_const(0x2a, 0x1b, 0x40, 0x2b),
+        selection: Color32::from_rgba_unmultiplied_const(0x93, 0x33, 0xea, 0x40),
         search_current: Color32::from_rgba_unmultiplied_const(0xf9, 0x73, 0x16, 0x99),
         search_other: Color32::from_rgba_unmultiplied_const(0xfb, 0xbf, 0x24, 0x80),
-        field_highlight: Color32::from_rgba_unmultiplied_const(0x3b, 0x82, 0xf6, 0x2e),
+        field_highlight: Color32::from_rgba_unmultiplied_const(0x93, 0x33, 0xea, 0x24),
         field_required: Color32::from_rgba_unmultiplied_const(0xbe, 0x12, 0x3c, 0x2e),
     };
 
@@ -197,8 +217,14 @@ pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 
 // --- metrics ---
 
+/// Height of a glass bar's visible slab — the rounded panel itself, stroke
+/// included, but not the inset that floats it off the window edge. Pass these
+/// through [`bar_panel_size`] when sizing the panel that holds one.
 pub const TOOLBAR_HEIGHT: f32 = 44.0;
-pub const TAB_HEIGHT: f32 = 34.0;
+/// Matches [`TOOLBAR_HEIGHT`] because the tab strip holds the same 30px close
+/// buttons the toolbar does. At the old 34 they did not fit inside the frame's
+/// padding and were drawn with their bottom edge clipped off.
+pub const TAB_HEIGHT: f32 = 44.0;
 pub const STATUS_HEIGHT: f32 = 26.0;
 pub const ROW_HEIGHT: f32 = 30.0;
 pub const GUTTER: f32 = 12.0;
@@ -210,28 +236,77 @@ pub const RADIUS_SMALL: u8 = 6;
 pub const PAGE_GAP: f32 = 14.0;
 /// Margin around the whole document.
 pub const PAGE_MARGIN: f32 = 18.0;
+/// Corner radius of the small controls inside a bar — buttons and the pill
+/// groups the toolbar arranges them into.
+pub const RADIUS_GLASS: u8 = 7;
 
+/// Panels are flush in the flat design; the hairline does the separating.
+///
+/// Kept as a named zero rather than deleted so the panel-sizing arithmetic
+/// below still reads as "slab plus inset" and reintroducing an inset is a
+/// one-line change.
+pub const GLASS_INSET: i8 = 0;
+
+/// Width of the far-left tool rail.
+pub const RAIL_WIDTH: f32 = 46.0;
+/// Width of the navigation sidebar that switches side panels.
+pub const NAV_WIDTH: f32 = 176.0;
+/// Default width of the list panel beside the nav.
+pub const LIST_WIDTH: f32 = 226.0;
+/// Default width of the right-hand dock that holds Comments and the Assistant.
+pub const DOCK_WIDTH: f32 = 266.0;
+/// The dock is resizable. Below this the comment text wraps to two or three
+/// words a line and stops being readable; above it the document loses more
+/// width than a side panel is worth.
+pub const DOCK_MIN_WIDTH: f32 = 220.0;
+pub const DOCK_MAX_WIDTH: f32 = 520.0;
+
+/// The size a panel must reserve to hold a bar of `slab` height.
+///
+/// `Panel::exact_size` is an *outer* size: egui gives the contents
+/// `exact_size` minus the frame's inner margin, stroke **and outer margin**,
+/// then clips to the panel. A panel asked for the bare slab height pays the
+/// frame out of its own widget row — which is how the toolbar once ended up
+/// with 22px to draw 30px buttons in.
+pub const fn bar_panel_size(slab: f32) -> f32 {
+    slab + GLASS_INSET as f32
+}
+
+/// A chrome bar: opaque fill, a hairline along its lower edge, no shadow.
+///
+/// Flat by design. The reference separates panels with a single hairline and
+/// nothing else — no inset, no rounding, no drop shadow — so a bar is a fill
+/// and one border.
+pub fn bar(p: &Palette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(p.card)
+        .inner_margin(egui::Margin::symmetric(12, 6))
+}
+
+/// Shadow under a floating surface.
+///
+/// Only popovers and the rendered page float now; panels are flush, so this is
+/// far softer than the glass design needed.
 pub fn card_shadow(p: &Palette) -> egui::epaint::Shadow {
     egui::epaint::Shadow {
-        offset: [0, 6],
-        blur: 22,
+        offset: [0, 4],
+        blur: 16,
         spread: 0,
         color: if p.ground == Palette::DARK.ground {
-            Color32::from_black_alpha(0x66)
+            Color32::from_black_alpha(0x59)
         } else {
-            Color32::from_black_alpha(0x22)
+            Color32::from_black_alpha(0x14)
         },
     }
 }
 
-/// A translucent glass panel.
+/// A bordered surface inside a panel — a comment, a card in a list.
 pub fn card(p: &Palette) -> egui::Frame {
     egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(RADIUS_CARD))
         .inner_margin(egui::Margin::same(10))
-        .shadow(card_shadow(p))
 }
 
 /// A menu or dialog surface. Opaque, because text over a translucent menu that
@@ -242,24 +317,32 @@ pub fn popover(p: &Palette) -> egui::Frame {
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(RADIUS_CONTROL))
         .inner_margin(egui::Margin::same(8))
-        .shadow(egui::epaint::Shadow {
-            offset: [0, 10],
-            blur: 30,
-            spread: 0,
-            color: Color32::from_black_alpha(0x77),
-        })
+        .shadow(card_shadow(p))
 }
 
-/// Paints the inset highlight along a panel's top edge that gives it thickness.
-pub fn glass_highlight(painter: &egui::Painter, rect: egui::Rect, p: &Palette) {
-    let inset = rect.shrink(1.0);
-    painter.line_segment(
-        [
-            egui::pos2(inset.left() + 8.0, inset.top() + 0.5),
-            egui::pos2(inset.right() - 8.0, inset.top() + 0.5),
-        ],
-        Stroke::new(1.0, p.highlight),
-    );
+/// Paints the hairline that separates a panel from what is next to it.
+///
+/// Replaces the glass design's inset top highlight: a flat panel gets its
+/// definition from an edge, not from a lit bevel.
+pub fn hairline(painter: &egui::Painter, rect: egui::Rect, p: &Palette, side: Edge) {
+    let (a, b) = match side {
+        Edge::Bottom => (rect.left_bottom(), rect.right_bottom()),
+        Edge::Top => (rect.left_top(), rect.right_top()),
+        Edge::Right => (rect.right_top(), rect.right_bottom()),
+        Edge::Left => (rect.left_top(), rect.left_bottom()),
+    };
+    // Half-pixel so a 1px line lands on the pixel rather than across two.
+    let off = egui::vec2(0.5, 0.5);
+    painter.line_segment([a - off, b - off], Stroke::new(1.0, p.border));
+}
+
+/// Which edge of a panel a [`hairline`] runs along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Top,
+    Bottom,
+    Left,
+    Right,
 }
 
 /// Applies the palette to an egui context.
@@ -364,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn primary_text_meets_wcag_aa_on_a_glass_panel() {
+    fn primary_text_meets_wcag_aa_on_a_panel() {
         // Measured against what the panel actually composites to, not against
         // the nominal card colour.
         for mode in [ThemeMode::Dark, ThemeMode::Light] {
@@ -498,9 +581,18 @@ mod tests {
     }
 
     #[test]
+    fn the_dock_default_sits_inside_its_own_bounds() {
+        // A default outside the range gets silently clamped on first launch,
+        // which looks like the panel resizing itself for no reason.
+        assert!(DOCK_MIN_WIDTH < DOCK_MAX_WIDTH);
+        assert!((DOCK_MIN_WIDTH..=DOCK_MAX_WIDTH).contains(&DOCK_WIDTH));
+    }
+
+    #[test]
     fn toggling_the_theme_twice_returns_to_the_start() {
         assert_eq!(ThemeMode::Dark.toggled().toggled(), ThemeMode::Dark);
         assert!(ThemeMode::Dark.is_dark());
         assert!(!ThemeMode::Light.is_dark());
     }
 }
+

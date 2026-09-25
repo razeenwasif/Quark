@@ -143,6 +143,9 @@ pub fn show(
 
     paint_drafting(&painter, p, tab, tool, origin);
 
+    // Last, so the bars sit over the page rather than under it.
+    scrollbars(ui, tab, canvas, p);
+
     action
 }
 
@@ -1133,9 +1136,210 @@ pub fn zoom_to_rect(tab: &mut Tab, page: usize, rect: Rect) {
     tab.bump_token();
 }
 
+
+/// Length and position of a scrollbar thumb, in pixels along its track.
+///
+/// Pure so the arithmetic can be tested: a thumb that runs off the end of its
+/// track, or that never reaches the end at full scroll, is hard to spot by eye
+/// and obvious in a test.
+fn thumb(track_len: f32, view: f32, content: f32, offset: f32) -> (f32, f32) {
+    if content <= 0.0 || track_len <= 0.0 {
+        return (track_len.max(0.0), 0.0);
+    }
+    // Proportional to how much of the content is visible, with a floor so a
+    // thousand-page document still has something grabbable.
+    let len = (track_len * (view / content)).clamp(MIN_THUMB.min(track_len), track_len);
+    let travel = (track_len - len).max(0.0);
+    let max_offset = (content - view).max(1.0);
+    let t = (offset / max_offset).clamp(0.0, 1.0);
+    (len, t * travel)
+}
+
+
+/// Thickness of a scrollbar, and how far it sits from the canvas edge.
+const BAR: f32 = 9.0;
+const BAR_PAD: f32 = 3.0;
+/// A thumb shorter than this is impossible to grab.
+const MIN_THUMB: f32 = 28.0;
+
+/// Draws the canvas scrollbars and handles dragging them.
+///
+/// The viewer scrolls a custom offset rather than living inside an
+/// `egui::ScrollArea`, so it gets no scrollbars for free. Without them a page
+/// zoomed past the window edge can only be reached by wheel or drag, and
+/// nothing on screen says there is more to the right.
+///
+/// Each axis appears only when the content actually overflows it.
+fn scrollbars(ui: &mut Ui, tab: &mut Tab, canvas: ERect, p: &Palette) {
+    let content = tab.layout.content_size;
+    let view = tab.viewport;
+    let over_x = content.x > view.x + 0.5;
+    let over_y = content.y > view.y + 0.5;
+    if !over_x && !over_y {
+        return;
+    }
+
+    // The track stops short of the other bar so the two do not overlap in the
+    // corner.
+    let end_inset = |other: bool| if other { BAR + BAR_PAD * 2.0 } else { 0.0 };
+
+    if over_x {
+        let track = ERect::from_min_max(
+            pos2(canvas.left() + BAR_PAD, canvas.bottom() - BAR - BAR_PAD),
+            pos2(canvas.right() - BAR_PAD - end_inset(over_y), canvas.bottom() - BAR_PAD),
+        );
+        if let Some(offset) = bar(ui, "hscroll", track, true, tab.scroll.x, view.x, content.x, p) {
+            tab.scroll.x = offset;
+            tab.clamp_scroll();
+        }
+    }
+    if over_y {
+        let track = ERect::from_min_max(
+            pos2(canvas.right() - BAR - BAR_PAD, canvas.top() + BAR_PAD),
+            pos2(canvas.right() - BAR_PAD, canvas.bottom() - BAR_PAD - end_inset(over_x)),
+        );
+        if let Some(offset) = bar(ui, "vscroll", track, false, tab.scroll.y, view.y, content.y, p) {
+            tab.scroll.y = offset;
+            tab.clamp_scroll();
+        }
+    }
+}
+
+/// One scrollbar. Returns a new scroll offset when the user moved it.
+#[allow(clippy::too_many_arguments)]
+fn bar(
+    ui: &mut Ui,
+    id: &str,
+    track: ERect,
+    horizontal: bool,
+    offset: f32,
+    view: f32,
+    content: f32,
+    p: &Palette,
+) -> Option<f32> {
+    let track_len = if horizontal {
+        track.width()
+    } else {
+        track.height()
+    };
+    let max_offset = (content - view).max(1.0);
+
+    let (thumb_len, thumb_start) = thumb(track_len, view, content, offset);
+    let travel = (track_len - thumb_len).max(0.0);
+
+    let thumb = if horizontal {
+        ERect::from_min_size(
+            pos2(track.left() + thumb_start, track.top()),
+            egui::vec2(thumb_len, track.height()),
+        )
+    } else {
+        ERect::from_min_size(
+            pos2(track.left(), track.top() + thumb_start),
+            egui::vec2(track.width(), thumb_len),
+        )
+    };
+
+    let response = ui.interact(
+        track,
+        ui.id().with(id),
+        Sense::click_and_drag(),
+    );
+    let hovered = response.hovered() || response.dragged();
+
+    let painter = ui.painter();
+    let radius = CornerRadius::same((BAR / 2.0) as u8);
+    // The track only appears on hover: a permanently visible one is a heavy
+    // frame around a document that is meant to be the focus.
+    if hovered {
+        painter.rect_filled(track, radius, p.card_hover);
+    }
+    painter.rect_filled(
+        thumb,
+        radius,
+        if hovered { p.accent } else { p.text_faint },
+    );
+
+    if response.dragged() || response.clicked() {
+        let pointer = response.interact_pointer_pos()?;
+        let along = if horizontal {
+            pointer.x - track.left()
+        } else {
+            pointer.y - track.top()
+        };
+        // Centre the thumb on the pointer, so a click jumps to roughly where
+        // the user pointed rather than to its top-left corner.
+        let want = (along - thumb_len / 2.0).clamp(0.0, travel.max(0.0));
+        if travel <= 0.0 {
+            return None;
+        }
+        return Some((want / travel) * max_offset);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_scroll_thumb_spans_the_track_when_nothing_overflows() {
+        // A full-length thumb is the signal that there is nowhere to scroll.
+        let (len, start) = thumb(200.0, 500.0, 500.0, 0.0);
+        assert!((len - 200.0).abs() < 0.01, "len {len}");
+        assert_eq!(start, 0.0);
+    }
+
+    #[test]
+    fn the_thumb_reaches_the_end_of_the_track_at_full_scroll() {
+        // Off-by-one here leaves a gap at the end that looks like the document
+        // has more content the user cannot reach.
+        let (len, start) = thumb(300.0, 400.0, 1200.0, 800.0);
+        assert!((start + len - 300.0).abs() < 0.01, "start {start} len {len}");
+    }
+
+    #[test]
+    fn the_thumb_starts_at_zero_when_scrolled_to_the_top() {
+        let (_, start) = thumb(300.0, 400.0, 1200.0, 0.0);
+        assert_eq!(start, 0.0);
+    }
+
+    #[test]
+    fn the_thumb_is_proportional_to_how_much_is_visible() {
+        // A quarter visible is a quarter-length thumb.
+        let (len, _) = thumb(400.0, 250.0, 1000.0, 0.0);
+        assert!((len - 100.0).abs() < 0.01, "len {len}");
+    }
+
+    #[test]
+    fn a_very_long_document_still_has_a_grabbable_thumb() {
+        // Strictly proportional, a 5000-page document would give a thumb under
+        // a pixel tall.
+        let (len, _) = thumb(400.0, 500.0, 5_000_000.0, 0.0);
+        assert!(len >= 20.0, "thumb too small to grab: {len}");
+    }
+
+    #[test]
+    fn the_thumb_never_runs_past_its_track() {
+        // Scroll offsets can briefly exceed the maximum while a zoom is being
+        // applied, before the clamp runs.
+        for offset in [0.0, 500.0, 1_000.0, 99_999.0] {
+            let (len, start) = thumb(300.0, 400.0, 1200.0, offset);
+            assert!(
+                start + len <= 300.01,
+                "offset {offset} put the thumb at {start}+{len}"
+            );
+            assert!(start >= 0.0, "offset {offset} gave a negative start");
+        }
+    }
+
+    #[test]
+    fn degenerate_sizes_do_not_divide_by_zero() {
+        // A document still loading reports zero content.
+        let (len, start) = thumb(300.0, 0.0, 0.0, 0.0);
+        assert!(len.is_finite() && start.is_finite(), "{len} {start}");
+        let (len, start) = thumb(0.0, 100.0, 200.0, 10.0);
+        assert!(len.is_finite() && start.is_finite(), "{len} {start}");
+    }
     use quark_core::annot::AnnotId;
 
     #[test]

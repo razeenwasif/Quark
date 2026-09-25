@@ -18,5 +18,7 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Security",
     "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_Security_Credentials",
 ] }
 windows-core.workspace = true

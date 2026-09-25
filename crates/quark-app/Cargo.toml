@@ -13,6 +13,7 @@ path = "src/main.rs"
 quark-core.workspace = true
 quark-pdf.workspace = true
 quark-ui.workspace = true
+quark-ai.workspace = true
 egui.workspace = true
 eframe.workspace = true
 rfd.workspace = true
@@ -24,6 +25,11 @@ serde_json.workspace = true
 toml.workspace = true
 dirs.workspace = true
 image.workspace = true
+chrono.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 quark-shell.workspace = true
+
+[build-dependencies]
+ico.workspace = true
+winresource.workspace = true

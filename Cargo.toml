@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/quark-ai",
     "crates/quark-app",
     "crates/quark-core",
     "crates/quark-pdf",
@@ -13,6 +14,7 @@ members = [
 # toolchain is pure waste. Excluding it here keeps the Windows build to the
 # crates that actually ship, while `cargo xtask ...` still resolves by name.
 default-members = [
+    "crates/quark-ai",
     "crates/quark-app",
     "crates/quark-core",
     "crates/quark-pdf",
@@ -29,6 +31,7 @@ repository = "https://github.com/razeenwasif/quark"
 
 [workspace.dependencies]
 # --- internal ---
+quark-ai = { path = "crates/quark-ai" }
 quark-core = { path = "crates/quark-core" }
 quark-pdf = { path = "crates/quark-pdf" }
 quark-ui = { path = "crates/quark-ui" }
@@ -78,6 +81,11 @@ lopdf = { version = "0.44", default-features = false, features = [
 
 # --- concurrency ---
 crossbeam-channel = "0.5"
+
+# --- http ---
+# Blocking on purpose: the AI service is a worker thread with channels, the
+# same shape as PdfService, so an async runtime would buy nothing.
+ureq = { version = "3", features = ["json", "rustls"] }
 parking_lot = "0.12"
 rayon = "1.10"
 
@@ -103,6 +111,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 sha2 = "0.10"
 base64 = "0.22"
 dirs = "6"
+
+# --- build-time resources ---
+# Generating the .ico and compiling it into the exe, so Explorer and the
+# taskbar have an icon to draw. Build-only: neither ships in the binary.
+ico = "0.4"
+winresource = "0.1"
 
 # --- diagnostics ---
 tracing = "0.1"

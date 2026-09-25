@@ -16,7 +16,8 @@ use quark_ui::icons::Icon;
 use quark_ui::theme::{self, Palette};
 use quark_ui::widgets;
 
-use crate::app::{App, save_prefs};
+use crate::app::{App, Dock, save_prefs};
+use crate::assistant;
 
 /// Shown by Help. Deliberately short: the command palette is the real index.
 const HELP_TEXT: &str = "\
@@ -45,7 +46,7 @@ impl App {
         egui::Panel::top("menu")
             .exact_size(28.0)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(p.ground).inner_margin(egui::Margin::symmetric(6, 2)))
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 2)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -123,157 +124,783 @@ impl App {
         }
     }
 
+    /// The far-left tool rail.
+    ///
+    /// Dark in both themes: it reads as the frame of the application rather
+    /// than as another surface, which is what keeps the four light columns
+    /// beside it from blurring into one.
+    /// Drains the assistant worker into the conversation.
+    ///
+    /// Called every frame from `update`, like the PDF service drain: a streamed
+    /// answer only appears if something is pulling events off the channel.
+    pub(crate) fn drain_assistant(&mut self, ctx: &Context) {
+        let mut got_any = false;
+        while let Some(event) = self.ai.service.try_recv() {
+            got_any = true;
+            match event {
+                quark_ai::AiEvent::Delta { id, delta } => self.ai.apply(id, delta),
+                quark_ai::AiEvent::Failed { id, message, .. } => self.ai.fail(id, message),
+                quark_ai::AiEvent::Models { names } => {
+                    // A fresh install points at a default model the user may
+                    // well not have pulled, and the only symptom is a 404 when
+                    // they finally ask something. Adopting the first real model
+                    // fixes that — but only when the current value is still the
+                    // untouched default, so a deliberate choice is never
+                    // overridden.
+                    let backend = assistant::backend_of(&self.prefs);
+                    let untouched = self.prefs.ai_model == backend.default_model();
+                    if untouched && !names.is_empty() && !names.contains(&self.prefs.ai_model) {
+                        self.prefs.ai_model = names[0].clone();
+                    }
+                    self.ai.models = names;
+                }
+            }
+        }
+        // A streaming answer is the one thing in Quark that changes without
+        // input, so it needs a repaint asked for explicitly.
+        if got_any || self.ai.in_flight.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(33));
+        }
+    }
+
+    /// Builds the request and hands it to the worker.
+    fn send_question(&mut self) {
+        let question = std::mem::take(&mut self.ai.draft).trim().to_string();
+        if question.is_empty() {
+            return;
+        }
+        let backend = assistant::backend_of(&self.prefs);
+        let scope = assistant::scope_of(&self.prefs);
+
+        // Assemble the document context from the open tab.
+        let mut doc = quark_ai::DocContext::default();
+        if let Some(tab) = self.tab() {
+            doc.title = tab.title();
+            doc.current_page = tab.current_page;
+            doc.page_count = tab.page_count();
+            doc.selection = tab.selected_text();
+            let range = scope.pages(doc.current_page, doc.page_count);
+            doc.pages = range
+                .filter_map(|i| tab.text(i).map(|t| (i, t.text.clone())))
+                .collect();
+        }
+
+        let id = self.ai.service.new_turn();
+        let history = {
+            let mut h = self.ai.history();
+            h.push(quark_ai::Message::user(question.clone()));
+            h
+        };
+        let request = quark_ai::context::build_request(
+            self.prefs.ai_model.clone(),
+            &doc,
+            history,
+            // Generous, and streamed, so a long answer is not truncated by a
+            // ceiling the user never chose.
+            8192,
+        );
+
+        // The credential is fetched per turn rather than held: it is then never
+        // resident in Quark's memory between questions.
+        let provider: Box<dyn quark_ai::Provider> = match backend {
+            quark_ai::Backend::Ollama => Box::new(quark_ai::Ollama::local()),
+            quark_ai::Backend::Anthropic => {
+                Box::new(quark_ai::Anthropic::new(self.stored_key(backend)))
+            }
+            quark_ai::Backend::OpenAiCompat => Box::new(quark_ai::OpenAiCompat::new(
+                "OpenAI-compatible",
+                self.prefs.ai_base_url.clone(),
+                self.stored_key(backend),
+            )),
+        };
+
+        self.ai.begin(id, question);
+        self.ai.service.ask(id, provider, request);
+    }
+
+    /// Reads a backend's key out of the OS credential store.
+    ///
+    /// An environment variable wins when set, which is how the Anthropic SDKs
+    /// resolve credentials and makes it easy to override for a one-off test
+    /// without touching what is stored.
+    fn stored_key(&self, backend: quark_ai::Backend) -> String {
+        let env_name = match backend {
+            quark_ai::Backend::Anthropic => "ANTHROPIC_API_KEY",
+            quark_ai::Backend::OpenAiCompat => "OPENAI_API_KEY",
+            quark_ai::Backend::Ollama => return String::new(),
+        };
+        if let Ok(k) = std::env::var(env_name) {
+            if !k.trim().is_empty() {
+                return k;
+            }
+        }
+        backend
+            .credential_key()
+            .and_then(|t| quark_shell::load_secret(t).ok().flatten())
+            .unwrap_or_default()
+    }
+
+    /// The assistant dock.
+    fn assistant_panel(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let backend = assistant::backend_of(&self.prefs);
+
+        // A cloud backend sends document text off the machine. Said once, up
+        // front, rather than buried in settings — and not at all for Ollama,
+        // where it would be untrue.
+        if backend.leaves_the_machine() && !self.ai.egress_acknowledged {
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} runs in the cloud. Asking a question sends the pages in \
+                     scope, and any selected text, to it.",
+                    backend.label()
+                ))
+                .size(11.5)
+                .color(p.text_muted),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if widgets::text_button(ui, p, "I understand", false).clicked() {
+                    self.ai.egress_acknowledged = true;
+                }
+                if widgets::text_button(ui, p, "Use Ollama instead", false).clicked() {
+                    self.prefs.ai_backend = assistant::backend_key(quark_ai::Backend::Ollama).into();
+                    self.prefs.ai_model = quark_ai::Backend::Ollama.default_model().into();
+                }
+            });
+            return;
+        }
+
+        // --- backend and model ---
+        //
+        // The model list is fetched once per backend, through the worker: for
+        // Ollama it is an HTTP call, and asking on every frame would be sixty
+        // requests a second.
+        if self.ai.models_requested_for != Some(backend) {
+            self.ai.models_requested_for = Some(backend);
+            self.ai.models.clear();
+            let lister: Box<dyn quark_ai::Provider> = match backend {
+                quark_ai::Backend::Ollama => Box::new(quark_ai::Ollama::local()),
+                quark_ai::Backend::Anthropic => Box::new(quark_ai::Anthropic::new(String::new())),
+                quark_ai::Backend::OpenAiCompat => Box::new(quark_ai::OpenAiCompat::new(
+                    "OpenAI-compatible",
+                    self.prefs.ai_base_url.clone(),
+                    String::new(),
+                )),
+            };
+            self.ai.service.list_models(lister);
+        }
+
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("ai-backend")
+                .selected_text(RichText::new(backend.label()).size(11.5))
+                .width(108.0)
+                .show_ui(ui, |ui| {
+                    for b in quark_ai::Backend::ALL {
+                        if ui.selectable_label(b == backend, b.label()).clicked() && b != backend {
+                            self.prefs.ai_backend = assistant::backend_key(b).into();
+                            // The old model name means nothing to the new
+                            // backend, so it cannot be carried across.
+                            self.prefs.ai_model = b.default_model().into();
+                        }
+                    }
+                });
+
+            let model = self.prefs.ai_model.clone();
+            egui::ComboBox::from_id_salt("ai-model")
+                .selected_text(RichText::new(widgets::elide(&model, 18, true)).size(11.5))
+                .width(ui.available_width().max(60.0))
+                .show_ui(ui, |ui| {
+                    if self.ai.models.is_empty() {
+                        ui.label(
+                            RichText::new(match backend {
+                                quark_ai::Backend::Ollama => "No models found — is Ollama running?",
+                                _ => "Type a model name in Settings.",
+                            })
+                            .size(11.0)
+                            .color(p.text_faint),
+                        );
+                    }
+                    for name in &self.ai.models {
+                        if ui.selectable_label(*name == model, name).clicked() {
+                            self.prefs.ai_model = name.clone();
+                        }
+                    }
+                });
+        });
+        ui.add_space(4.0);
+
+        // --- credentials ---
+        //
+        // Re-checked only when the backend changes: reading the credential
+        // store is a syscall, and doing it every frame is sixty a second.
+        if self.ai.key_state.map(|(b, _)| b) != Some(backend) {
+            self.ai.key_state = Some((backend, assistant::key_source(backend)));
+        }
+        let source = self.ai.key_state.map(|(_, s)| s).unwrap_or(assistant::KeySource::Missing);
+
+        if backend.leaves_the_machine() {
+            let (label, colour) = match source {
+                assistant::KeySource::Environment => (
+                    format!("Key from {}", assistant::env_var(backend).unwrap_or("")),
+                    p.success,
+                ),
+                assistant::KeySource::Stored => ("Key stored".to_string(), p.success),
+                assistant::KeySource::Missing => ("No API key set".to_string(), p.warning),
+            };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(label).size(11.0).color(colour));
+                if widgets::text_button(
+                    ui,
+                    p,
+                    if self.ai.settings_open { "Hide" } else { "Set up" },
+                    self.ai.settings_open,
+                )
+                .clicked()
+                {
+                    self.ai.settings_open = !self.ai.settings_open;
+                    self.ai.key_input.clear();
+                }
+            });
+            ui.add_space(4.0);
+        }
+
+        if self.ai.settings_open && backend.leaves_the_machine() {
+            // Base URL, for the one backend that needs to be pointed somewhere.
+            if backend == quark_ai::Backend::OpenAiCompat {
+                ui.label(RichText::new("Endpoint").size(10.5).color(p.text_faint));
+                ui.horizontal_wrapped(|ui| {
+                    for (name, url) in assistant::BASE_URL_PRESETS {
+                        let active = self.prefs.ai_base_url == url;
+                        if widgets::text_button(ui, p, name, active).clicked() {
+                            self.prefs.ai_base_url = url.into();
+                        }
+                    }
+                });
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.prefs.ai_base_url)
+                        .desired_width(f32::INFINITY)
+                        .font(egui::FontId::proportional(11.0)),
+                );
+                ui.add_space(6.0);
+
+                // These endpoints cannot be enumerated — a proxy serves models
+                // under whatever names its operator chose — so the model is
+                // typed rather than picked.
+                ui.label(RichText::new("Model").size(10.5).color(p.text_faint));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.prefs.ai_model)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("gpt-4o-mini, gemini-2.5-flash, …")
+                        .font(egui::FontId::proportional(11.0)),
+                );
+                ui.add_space(6.0);
+            }
+
+            ui.label(RichText::new("API key").size(10.5).color(p.text_faint));
+            // Masked, and a stored key is never read back into the field: the
+            // credential store is write-and-use.
+            ui.add(
+                egui::TextEdit::singleline(&mut self.ai.key_input)
+                    .password(true)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(match source {
+                        assistant::KeySource::Stored => "Replace the stored key",
+                        _ => "Paste your key",
+                    })
+                    .font(egui::FontId::proportional(11.0)),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let typed = !self.ai.key_input.trim().is_empty();
+                if widgets::text_button(ui, p, "Save", false).clicked() && typed {
+                    if let Some(target) = backend.credential_key() {
+                        match quark_shell::store_secret(target, self.ai.key_input.trim()) {
+                            Ok(()) => {
+                                self.ai.key_input.clear();
+                                self.ai.key_state = None;
+                                self.ai.settings_open = false;
+                                self.toasts.push(crate::app::Toast {
+                                    text: format!("Key saved for {}", backend.label()),
+                                    error: false,
+                                    ttl: 3.5,
+                                });
+                            }
+                            Err(e) => self.toasts.push(crate::app::Toast {
+                                text: format!("Could not save the key: {e}"),
+                                error: true,
+                                ttl: 8.0,
+                            }),
+                        }
+                    }
+                }
+                if source == assistant::KeySource::Stored
+                    && widgets::text_button(ui, p, "Remove", false).clicked()
+                {
+                    if let Some(target) = backend.credential_key() {
+                        let _ = quark_shell::delete_secret(target);
+                        self.ai.key_state = None;
+                    }
+                }
+            });
+            if source == assistant::KeySource::Environment {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "The environment variable takes priority, so a saved key \
+                         will not be used until it is unset.",
+                    )
+                    .size(10.5)
+                    .color(p.text_faint),
+                );
+            }
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
+        }
+
+        // The configured model has to exist, or the failure only shows up as a
+        // 404 at the moment a question is asked.
+        if !self.ai.models.is_empty() && !self.ai.models.contains(&self.prefs.ai_model) {
+            ui.label(
+                RichText::new(format!(
+                    "\u{201c}{}\u{201d} is not installed. Pick one above.",
+                    self.prefs.ai_model
+                ))
+                .size(11.0)
+                .color(p.warning),
+            );
+            ui.add_space(4.0);
+        }
+
+        // --- how much of the document goes with the question ---
+        //
+        // Kept in the panel rather than buried in settings: it changes what is
+        // sent and what it costs, so it belongs where the question is asked.
+        ui.horizontal(|ui| {
+            let current = assistant::scope_of(&self.prefs);
+            for scope in quark_ai::Scope::ALL {
+                let label = match scope {
+                    quark_ai::Scope::Page => "Page",
+                    quark_ai::Scope::Nearby => "Nearby",
+                    quark_ai::Scope::Whole => "Whole",
+                };
+                if widgets::text_button(ui, p, label, current == scope).clicked() {
+                    self.prefs.ai_scope = assistant::scope_key(scope).into();
+                }
+            }
+        });
+        ui.add_space(4.0);
+
+        // --- conversation ---
+        let composer = 74.0;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .stick_to_bottom(true)
+            .max_height((ui.available_height() - composer).max(60.0))
+            .show(ui, |ui| {
+                if self.ai.turns.is_empty() {
+                    ui.add_space(14.0);
+                    ui.label(
+                        RichText::new("Ask about the document.")
+                            .size(12.0)
+                            .color(p.text_muted),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "{} · {}",
+                            backend.label(),
+                            assistant::scope_of(&self.prefs).label()
+                        ))
+                        .size(11.0)
+                        .color(p.text_faint),
+                    );
+                    return;
+                }
+                for turn in &self.ai.turns {
+                    ui.add_space(8.0);
+                    let who = if turn.mine { "You" } else { backend.label() };
+                    ui.label(
+                        RichText::new(who)
+                            .size(10.5)
+                            .color(if turn.mine { p.accent_text } else { p.text_faint }),
+                    );
+                    if !turn.thinking.is_empty() {
+                        egui::CollapsingHeader::new(
+                            RichText::new("Reasoning").size(10.5).color(p.text_faint),
+                        )
+                        .id_salt(turn as *const _ as usize)
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(&turn.thinking)
+                                    .size(11.0)
+                                    .color(p.text_faint),
+                            );
+                        });
+                    }
+                    if !turn.text.is_empty() {
+                        ui.label(RichText::new(&turn.text).size(12.0).color(p.text));
+                    }
+                    if let Some(note) = &turn.note {
+                        ui.label(RichText::new(note).size(11.0).color(p.warning));
+                    }
+                }
+                ui.add_space(8.0);
+            });
+
+        // --- composer ---
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+        let busy = self.ai.in_flight.is_some();
+        let mut send = false;
+        ui.horizontal(|ui| {
+            let width = ui.available_width() - 34.0;
+            let field = ui.add_enabled(
+                !busy,
+                egui::TextEdit::singleline(&mut self.ai.draft)
+                    .desired_width(width)
+                    .hint_text("Ask about this document"),
+            );
+            // Enter sends, so the composer behaves like every other chat box.
+            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                send = true;
+            }
+            if busy {
+                if widgets::tool_button(ui, p, Icon::Close, "Stop", true, true).clicked() {
+                    self.ai.service.cancel();
+                }
+            } else if widgets::tool_button(
+                ui,
+                p,
+                Icon::ChevronRight,
+                "Send",
+                false,
+                !self.ai.draft.trim().is_empty(),
+            )
+            .clicked()
+            {
+                send = true;
+            }
+        });
+        if send && self.ai.can_send() {
+            self.send_question();
+        }
+    }
+
+    fn tool_rail(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        egui::Panel::left("rail")
+            .exact_size(theme::RAIL_WIDTH)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.rail)
+                    .inner_margin(egui::Margin::symmetric(8, 9)),
+            )
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    let has_doc = self.tab().is_some();
+                    for (tool, icon, tip) in TOOL_RAIL {
+                        let active = has_doc && self.tool == tool;
+                        if widgets::rail_button(ui, p, icon, tip, active, has_doc).clicked() {
+                            self.tool = tool;
+                        }
+                    }
+                });
+            });
+    }
+
+    /// The navigation sidebar: which structural panel the list column shows.
+    fn nav_sidebar(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let ctx = &ui.ctx().clone();
+        egui::Panel::left("nav")
+            .exact_size(theme::NAV_WIDTH)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.card)
+                    .inner_margin(egui::Margin::symmetric(9, 11)),
+            )
+            .show(ui, |ui| {
+                theme::hairline(ui.painter(), ui.max_rect(), p, theme::Edge::Right);
+                ui.spacing_mut().item_spacing.y = 2.0;
+
+                let title = self
+                    .tab()
+                    .map(|t| widgets::elide(&t.title(), 18, true))
+                    .unwrap_or_else(|| "Quark".into());
+                widgets::nav_title(ui, p, &title);
+                ui.add_space(9.0);
+
+                for (panel, icon, label) in NAV_PANELS {
+                    // Selecting the panel already showing closes the column,
+                    // which is the only way to give the document full width.
+                    let active = self.prefs.side_panel == panel;
+                    if widgets::nav_item(ui, p, icon, label, active).clicked() {
+                        self.prefs.side_panel = if active { SidePanel::None } else { panel };
+                    }
+                }
+
+                // The page count sits at the foot of the rail in the reference,
+                // where it is out of the way but always readable.
+                let footer = self
+                    .tab()
+                    .map(|t| format!("{} pages", t.page_count().max(1)))
+                    .unwrap_or_default();
+                if !footer.is_empty() {
+                    let avail = ui.available_height();
+                    ui.add_space((avail - 20.0).max(0.0));
+                    ui.label(RichText::new(footer).size(11.0).color(p.text_faint));
+                }
+                let _ = ctx;
+            });
+    }
+
+    /// The right-hand dock: comments, and the assistant once it has a backend.
+    fn dock_panel(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        if !self.dock_open || self.tab().is_none() {
+            return;
+        }
+        let mut action = PanelAction::None;
+        // Flush and flat, so the frame contributes no margin — but the width is
+        // still stored through `total_margin`, because `default_size` is an
+        // outer width while `available_width` is the width inside the frame.
+        // Reading one and writing the other is what walked the side panel down
+        // to its floor once per launch.
+        // Horizontal padding belongs on the frame, not on each pane: without
+        // it the contents start hard against the panel edge and clip.
+        let frame = egui::Frame::new()
+            .fill(p.card)
+            .inner_margin(egui::Margin::symmetric(10, 0));
+        let chrome_width = frame.total_margin().sum().x;
+
+        egui::Panel::right("dock")
+            .resizable(true)
+            .default_size(self.prefs.dock_width.max(theme::DOCK_MIN_WIDTH))
+            .size_range(theme::DOCK_MIN_WIDTH..=theme::DOCK_MAX_WIDTH)
+            .show_separator_line(false)
+            .frame(frame)
+            .show(ui, |ui| {
+                theme::hairline(ui.painter(), ui.max_rect(), p, theme::Edge::Left);
+                self.prefs.dock_width = ui.available_width() + chrome_width;
+
+                // Tab strip for the dock.
+                ui.add_space(7.0);
+                ui.horizontal(|ui| {
+                    for (which, label) in [(Dock::Comments, "Comments"), (Dock::Assistant, "Assistant")] {
+                        if widgets::text_button(ui, p, label, self.dock == which).clicked() {
+                            self.dock = which;
+                        }
+                    }
+                });
+                ui.add_space(5.0);
+                let line = ui.max_rect();
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(line.left(), ui.cursor().top()),
+                        egui::pos2(line.right(), ui.cursor().top()),
+                    ],
+                    egui::Stroke::new(1.0, p.border),
+                );
+                ui.add_space(7.0);
+
+                match self.dock {
+                    Dock::Comments => {
+                        let index = self.active;
+                        let (service, textures, prefs) =
+                            (&self.service, &mut self.textures, &self.prefs);
+                        if let Some(tab) = self.tabs.get_mut(index) {
+                            action = panels::show(
+                                ui,
+                                p,
+                                SidePanel::Comments,
+                                tab,
+                                service,
+                                textures,
+                                prefs,
+                            );
+                        }
+                    }
+                    Dock::Assistant => self.assistant_panel(ui, p),
+                }
+            });
+        self.handle_panel_action(action, &ui.ctx().clone());
+    }
+
+    /// The document toolbar: identity on the left, navigation centred, actions
+    /// on the right.
+    ///
+    /// The tool strip and the panel toggles that used to live here are gone —
+    /// the rail owns tools and the nav owns panels, and a control that exists
+    /// in two places teaches that neither one is authoritative.
     fn toolbar(&mut self, ui: &mut egui::Ui, p: &Palette) {
         // Panels are drawn into the parent `Ui` in this version of egui; the
         // context is still needed for dispatch, and cloning it is just an Arc.
         let ctx = &ui.ctx().clone();
         egui::Panel::top("toolbar")
-            .exact_size(theme::TOOLBAR_HEIGHT)
+            .exact_size(theme::bar_panel_size(theme::TOOLBAR_HEIGHT))
             .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(p.card)
-                    .inner_margin(egui::Margin::symmetric(8, 6)),
-            )
+            .frame(theme::bar(p))
             .show(ui, |ui| {
-                let rect = ui.max_rect();
-                theme::glass_highlight(ui.painter(), rect, p);
+                let bar = ui.max_rect();
+                theme::hairline(ui.painter(), bar, p, theme::Edge::Bottom);
+                let has_doc = self.tab().is_some();
 
+                // --- left: which document this is ---
                 ui.horizontal_centered(|ui| {
-                    let has_doc = self.tab().is_some();
-
-                    if widgets::tool_button(ui, p, Icon::Open, "Open (Ctrl+O)", false, true).clicked() {
-                        self.open_dialog();
-                    }
-                    let dirty = self.tab().map(|t| t.has_unsaved_changes()).unwrap_or(false);
-                    if widgets::tool_button(ui, p, Icon::Save, "Save (Ctrl+S)", dirty, has_doc)
-                        .clicked()
-                    {
-                        self.save(false);
-                    }
-                    if widgets::tool_button(ui, p, Icon::Print, "Print (Ctrl+P)", false, has_doc)
-                        .clicked()
-                    {
-                        self.dispatch(Command::Print, ctx);
-                    }
-
-                    widgets::separator(ui, p);
-
-                    let can_undo = self.tab().map(|t| t.history.can_undo()).unwrap_or(false);
-                    let can_redo = self.tab().map(|t| t.history.can_redo()).unwrap_or(false);
-                    if widgets::tool_button(ui, p, Icon::Undo, "Undo (Ctrl+Z)", false, can_undo)
-                        .clicked()
-                    {
-                        self.dispatch(Command::Undo, ctx);
-                    }
-                    if widgets::tool_button(ui, p, Icon::Redo, "Redo (Ctrl+Y)", false, can_redo)
-                        .clicked()
-                    {
-                        self.dispatch(Command::Redo, ctx);
-                    }
-
-                    widgets::separator(ui, p);
-
-                    // --- page navigation ---
-                    let (page, count) = self
+                    let (name, folder) = self
                         .tab()
-                        .map(|t| (t.current_page, t.page_count()))
-                        .unwrap_or((0, 0));
-                    if widgets::tool_button(ui, p, Icon::ChevronUp, "Previous page", false, page > 0)
-                        .clicked()
-                    {
-                        self.dispatch(Command::PrevPage, ctx);
-                    }
-                    let label = if count == 0 {
-                        "—".to_string()
-                    } else {
-                        format!("{} / {}", page + 1, count)
-                    };
-                    if widgets::text_button(ui, p, &label, false).clicked() && count > 0 {
-                        self.dispatch(Command::GoToPage(0), ctx);
-                    }
-                    if widgets::tool_button(
-                        ui,
-                        p,
-                        Icon::ChevronDown,
-                        "Next page",
-                        false,
-                        count > 0 && page + 1 < count,
-                    )
-                    .clicked()
-                    {
-                        self.dispatch(Command::NextPage, ctx);
-                    }
+                        .map(|t| {
+                            let name = widgets::elide(&t.title(), 22, true);
+                            let folder = t
+                                .path()
+                                .and_then(|q| q.parent().map(|d| d.to_string_lossy().into_owned()))
+                                .map(|d| widgets::elide(&d, 24, false))
+                                .unwrap_or_default();
+                            (name, folder)
+                        })
+                        .unwrap_or_else(|| (String::from("No document"), String::new()));
+                    widgets::file_chip(ui, p, &name, &folder);
+                });
 
-                    widgets::separator(ui, p);
+                // --- centre: page and zoom, truly centred on the bar ---
+                //
+                // Placed at an explicit rect rather than reached by padding:
+                // the left and right groups change width with the filename and
+                // the theme icon, and anything measured from them drifts.
+                let centre = egui::Rect::from_center_size(
+                    bar.center(),
+                    egui::vec2(CENTRE_GROUP_WIDTH, bar.height()),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(centre), |ui| {
+                    ui.horizontal_centered(|ui| {
+                        let (page, count) = self
+                            .tab()
+                            .map(|t| (t.current_page, t.page_count()))
+                            .unwrap_or((0, 0));
 
-                    // --- zoom ---
-                    if widgets::tool_button(ui, p, Icon::ZoomOut, "Zoom out (Ctrl+-)", false, has_doc)
-                        .clicked()
-                    {
-                        self.dispatch(Command::ZoomOut, ctx);
-                    }
-                    let zoom_label = self
-                        .tab()
-                        .map(|t| format!("{:.0}%", t.layout.scale * 100.0))
-                        .unwrap_or_else(|| "—".into());
-                    ui.menu_button(zoom_label, |ui| {
-                        for (label, mode) in [
-                            ("Fit Width", ZoomMode::FitWidth),
-                            ("Fit Page", ZoomMode::FitPage),
-                            ("Fit Height", ZoomMode::FitHeight),
-                            ("Actual Size", ZoomMode::Actual),
-                        ] {
-                            if ui.button(label).clicked() {
-                                self.dispatch(Command::SetZoom(mode), ctx);
-                                ui.close();
+                        widgets::pill(ui, p, |ui| {
+                            if widgets::tool_button(
+                                ui,
+                                p,
+                                Icon::ChevronUp,
+                                "Previous page",
+                                false,
+                                page > 0,
+                            )
+                            .clicked()
+                            {
+                                self.dispatch(Command::PrevPage, ctx);
                             }
-                        }
-                        ui.separator();
-                        for z in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0] {
-                            if ui.button(format!("{:.0}%", z * 100.0)).clicked() {
-                                self.dispatch(Command::SetZoom(ZoomMode::Custom(z)), ctx);
-                                ui.close();
+                            let label = if count == 0 {
+                                String::from("—")
+                            } else {
+                                format!("{} / {}", page + 1, count)
+                            };
+                            ui.label(RichText::new(label).size(12.0).color(p.text_muted));
+                            if widgets::tool_button(
+                                ui,
+                                p,
+                                Icon::ChevronDown,
+                                "Next page",
+                                false,
+                                count > 0 && page + 1 < count,
+                            )
+                            .clicked()
+                            {
+                                self.dispatch(Command::NextPage, ctx);
                             }
-                        }
-                    });
-                    if widgets::tool_button(ui, p, Icon::ZoomIn, "Zoom in (Ctrl+=)", false, has_doc)
-                        .clicked()
-                    {
-                        self.dispatch(Command::ZoomIn, ctx);
-                    }
-                    if widgets::tool_button(ui, p, Icon::FitWidth, "Fit width (Ctrl+2)", false, has_doc)
-                        .clicked()
-                    {
-                        self.dispatch(Command::SetZoom(ZoomMode::FitWidth), ctx);
-                    }
+                        });
 
-                    widgets::separator(ui, p);
+                        ui.add_space(6.0);
 
-                    // --- tools ---
-                    for (icon, tool, tip) in [
-                        (Icon::Cursor, Tool::Select, "Select (V)"),
-                        (Icon::Hand, Tool::Pan, "Hand (H)"),
-                        (Icon::Highlight, Tool::Highlight, "Highlight (Ctrl+Shift+H)"),
-                        (Icon::Underline, Tool::Underline, "Underline"),
-                        (Icon::StrikeOut, Tool::StrikeOut, "Strike through"),
-                        (Icon::Note, Tool::Note, "Sticky note"),
-                        (Icon::Text, Tool::FreeText, "Text box"),
-                        (Icon::Pen, Tool::Ink, "Draw"),
-                        (Icon::Eraser, Tool::Eraser, "Eraser"),
-                        (Icon::Square, Tool::Rectangle, "Rectangle"),
-                        (Icon::Circle, Tool::Ellipse, "Ellipse"),
-                        (Icon::Arrow, Tool::Arrow, "Arrow"),
-                        (Icon::Redact, Tool::Redact, "Mark for redaction"),
-                    ] {
-                        if widgets::tool_button(ui, p, icon, tip, self.tool == tool, has_doc)
+                        widgets::pill(ui, p, |ui| {
+                            if widgets::tool_button(
+                                ui,
+                                p,
+                                Icon::ZoomOut,
+                                "Zoom out (Ctrl+-)",
+                                false,
+                                has_doc,
+                            )
+                            .clicked()
+                            {
+                                self.dispatch(Command::ZoomOut, ctx);
+                            }
+                            let zoom_label = self
+                                .tab()
+                                .map(|t| format!("{:.0}%", t.layout.scale * 100.0))
+                                .unwrap_or_else(|| String::from("—"));
+                            ui.menu_button(zoom_label, |ui| {
+                                for (label, mode) in [
+                                    ("Fit Width", ZoomMode::FitWidth),
+                                    ("Fit Page", ZoomMode::FitPage),
+                                    ("Fit Height", ZoomMode::FitHeight),
+                                    ("Actual Size", ZoomMode::Actual),
+                                ] {
+                                    if ui.button(label).clicked() {
+                                        self.dispatch(Command::SetZoom(mode), ctx);
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                for z in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0] {
+                                    if ui.button(format!("{:.0}%", z * 100.0)).clicked() {
+                                        self.dispatch(Command::SetZoom(ZoomMode::Custom(z)), ctx);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            if widgets::tool_button(
+                                ui,
+                                p,
+                                Icon::ZoomIn,
+                                "Zoom in (Ctrl+=)",
+                                false,
+                                has_doc,
+                            )
+                            .clicked()
+                            {
+                                self.dispatch(Command::ZoomIn, ctx);
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        widgets::separator(ui, p);
+                        ui.add_space(2.0);
+
+                        let can_undo = self.tab().map(|t| t.history.can_undo()).unwrap_or(false);
+                        let can_redo = self.tab().map(|t| t.history.can_redo()).unwrap_or(false);
+                        if widgets::tool_button(ui, p, Icon::Undo, "Undo (Ctrl+Z)", false, can_undo)
                             .clicked()
                         {
-                            self.tool = tool;
+                            self.dispatch(Command::Undo, ctx);
                         }
-                    }
+                        if widgets::tool_button(ui, p, Icon::Redo, "Redo (Ctrl+Y)", false, can_redo)
+                            .clicked()
+                        {
+                            self.dispatch(Command::Redo, ctx);
+                        }
+                        let dirty = self.tab().map(|t| t.has_unsaved_changes()).unwrap_or(false);
+                        if widgets::tool_button(ui, p, Icon::Save, "Save (Ctrl+S)", dirty, has_doc)
+                            .clicked()
+                        {
+                            self.save(false);
+                        }
+                        if widgets::tool_button(ui, p, Icon::Print, "Print (Ctrl+P)", false, has_doc)
+                            .clicked()
+                        {
+                            self.dispatch(Command::Print, ctx);
+                        }
+                    });
+                });
 
-                    // --- right-hand group ---
+                // --- right: search, the dock, and the theme ---
+                ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let dark = self.theme.is_dark();
                         if widgets::tool_button(
@@ -288,52 +915,55 @@ impl App {
                         {
                             self.dispatch(Command::ToggleTheme, ctx);
                         }
+                        if widgets::tool_button(
+                            ui,
+                            p,
+                            Icon::Comment,
+                            "Comments and assistant",
+                            self.dock_open,
+                            has_doc,
+                        )
+                        .clicked()
+                        {
+                            self.dock_open = !self.dock_open;
+                        }
                         if widgets::tool_button(ui, p, Icon::Search, "Find (Ctrl+F)", false, has_doc)
                             .clicked()
                         {
                             self.dispatch(Command::Find, ctx);
                         }
-                        for (icon, panel, tip) in [
-                            (Icon::Fields, SidePanel::Fields, "Form fields"),
-                            (Icon::Attachment, SidePanel::Attachments, "Attachments"),
-                            (Icon::Comment, SidePanel::Comments, "Comments"),
-                            (Icon::Bookmark, SidePanel::Bookmarks, "Bookmarks"),
-                            (Icon::Thumbnails, SidePanel::Thumbnails, "Page thumbnails"),
-                        ] {
-                            let active = self.prefs.side_panel == panel;
-                            if widgets::tool_button(ui, p, icon, tip, active, has_doc).clicked() {
-                                self.dispatch(Command::TogglePanel(panel), ctx);
-                            }
-                        }
                     });
                 });
             });
     }
-
     fn tab_strip(&mut self, ui: &mut egui::Ui, p: &Palette) {
         // Panels are drawn into the parent `Ui` in this version of egui; the
         // context is still needed for dispatch, and cloning it is just an Arc.
         let _ctx = &ui.ctx().clone();
-        if self.tabs.len() < 2 {
-            return;
-        }
+        // Home is always in the strip, so unlike before there is no count at
+        // which the strip is not worth drawing.
         egui::Panel::top("tabs")
-            .exact_size(theme::TAB_HEIGHT)
+            .exact_size(theme::bar_panel_size(theme::TAB_HEIGHT))
             .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(p.ground)
-                    .inner_margin(egui::Margin::symmetric(6, 3)),
-            )
+            .frame(theme::bar(p))
             .show(ui, |ui| {
                 let mut to_close = None;
                 let mut to_select = None;
+                let mut go_home = false;
                 egui::ScrollArea::horizontal()
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            // Home first and always, with no close button —
+                            // there is nothing to close, and an X that does
+                            // nothing invites the click anyway.
+                            if widgets::text_button(ui, p, "Home", self.home.visible).clicked() {
+                                go_home = true;
+                            }
+                            widgets::separator(ui, p);
+
                             for (i, tab) in self.tabs.iter().enumerate() {
-                                let active = i == self.active;
+                                let active = !self.home.visible && i == self.active;
                                 let title = widgets::elide(&tab.title(), 26, true);
                                 let label = if tab.has_unsaved_changes() {
                                     format!("• {title}")
@@ -352,8 +982,11 @@ impl App {
                             }
                         });
                     });
+                if go_home {
+                    self.show_home();
+                }
                 if let Some(i) = to_select {
-                    self.active = i;
+                    self.show_tab(i);
                     self.textures.clear();
                 }
                 if let Some(i) = to_close {
@@ -367,12 +1000,20 @@ impl App {
         // context is still needed for dispatch, and cloning it is just an Arc.
         let _ctx = &ui.ctx().clone();
         egui::Panel::bottom("status")
-            .exact_size(theme::STATUS_HEIGHT)
+            .exact_size(theme::bar_panel_size(theme::STATUS_HEIGHT))
             .show_separator_line(false)
             .frame(
                 egui::Frame::new()
                     .fill(p.card)
-                    .inner_margin(egui::Margin::symmetric(10, 3)),
+                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .corner_radius(egui::CornerRadius::same(theme::RADIUS_GLASS))
+                    .outer_margin(egui::Margin {
+                        left: theme::GLASS_INSET,
+                        right: theme::GLASS_INSET,
+                        top: 0,
+                        bottom: theme::GLASS_INSET,
+                    })
+                    .inner_margin(egui::Margin::symmetric(12, 3)),
             )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
@@ -434,27 +1075,40 @@ impl App {
             });
     }
 
+    /// The list column: whatever the nav sidebar has selected.
     fn side_panel(&mut self, ui: &mut egui::Ui, p: &Palette) {
         // Panels are drawn into the parent `Ui` in this version of egui; the
         // context is still needed for dispatch, and cloning it is just an Arc.
         let ctx = &ui.ctx().clone();
-        if self.prefs.side_panel == SidePanel::None || self.tabs.is_empty() {
+        // Home carries its own rail, and the document panels have no document
+        // to describe while it is showing.
+        if self.prefs.side_panel == SidePanel::None || self.tabs.is_empty() || self.home.visible {
             return;
         }
         let which = self.prefs.side_panel;
         let mut action = PanelAction::None;
 
+        // Flush and flat: fill plus the hairline that separates it from the
+        // canvas. No inset, no rounding, no shadow, so `default_size` and
+        // `available_width` differ only by the inner margin.
+        let frame = egui::Frame::new()
+            .fill(p.card)
+            .inner_margin(egui::Margin::symmetric(8, 10));
+        // `default_size` is an outer width but `available_width` is the width
+        // inside the frame, so storing the latter directly loses the margins
+        // once per launch — the panel walks itself down to the floor over a
+        // few restarts.
+        let chrome_width = frame.total_margin().sum().x;
+
         egui::Panel::left("side")
             .resizable(true)
-            .default_size(self.prefs.side_panel_width)
-            .size_range(160.0..=520.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(p.card)
-                    .inner_margin(egui::Margin::symmetric(8, 8)),
-            )
+            .default_size(self.prefs.side_panel_width.max(theme::LIST_WIDTH))
+            .size_range(170.0..=520.0)
+            .show_separator_line(false)
+            .frame(frame)
             .show(ui, |ui| {
-                self.prefs.side_panel_width = ui.available_width();
+                theme::hairline(ui.painter(), ui.max_rect(), p, theme::Edge::Right);
+                self.prefs.side_panel_width = ui.available_width() + chrome_width;
                 let Some(index) = self.tabs.get_mut(self.active).map(|_| self.active) else {
                     return;
                 };
@@ -649,10 +1303,21 @@ impl App {
             }
             Command::Save => self.save(false),
             Command::SaveAs | Command::SaveACopy => self.save(true),
-            Command::Close => self.close_tab(self.active),
+            // Close acts on the surface being looked at, and home cannot be
+            // closed. Without this guard Ctrl+W on the home screen would shut
+            // a document the user cannot even see — `command_enabled` greys
+            // these out in the menu and the palette, but keyboard shortcuts
+            // reach `dispatch` directly.
+            Command::Close => {
+                if !self.home.visible {
+                    self.close_tab(self.active);
+                }
+            }
             Command::CloseAll => {
-                while !self.tabs.is_empty() {
-                    self.force_close_tab(0);
+                if !self.home.visible {
+                    while !self.tabs.is_empty() {
+                        self.force_close_tab(0);
+                    }
                 }
             }
             Command::Revert => {
@@ -1119,17 +1784,16 @@ impl App {
             Command::ShowTags | Command::AutoTagDocument => {
                 self.toast("Accessibility tagging is not implemented", false)
             }
+            // Home is position 0 of the strip, so cycling runs over
+            // `tabs.len() + 1` slots and wraps through it like any other tab.
             Command::NextTab => {
-                if !self.tabs.is_empty() {
-                    self.active = (self.active + 1) % self.tabs.len();
-                    self.textures.clear();
-                }
+                let slot = self.strip_position();
+                self.select_strip_position((slot + 1) % (self.tabs.len() + 1));
             }
             Command::PrevTab => {
-                if !self.tabs.is_empty() {
-                    self.active = (self.active + self.tabs.len() - 1) % self.tabs.len();
-                    self.textures.clear();
-                }
+                let slots = self.tabs.len() + 1;
+                let slot = self.strip_position();
+                self.select_strip_position((slot + slots - 1) % slots);
             }
             Command::CommandPalette => self.show_palette = true,
             Command::Help => {
@@ -1471,6 +2135,13 @@ impl eframe::App for App {
         let p = self.palette();
         self.textures.begin_frame();
         self.drain_service(ctx);
+        self.drain_assistant(ctx);
+
+        // A flat ground behind the panels. Nothing drifts any more, so this
+        // also drops the continuous 30fps repaint the ambient light needed —
+        // Quark now idles at zero frames like any other document viewer.
+        ui.painter()
+            .rect_filled(ui.max_rect(), egui::CornerRadius::ZERO, p.ground);
 
         // Age out toasts.
         let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
@@ -1517,24 +2188,53 @@ impl eframe::App for App {
             }
         }
 
+        // Panel order is layout order: egui hands each panel the rect the
+        // previous ones left behind. The menu spans the window, then the three
+        // left columns and the right dock claim full height, and only then do
+        // the toolbar and tab strip run across what remains — which is what
+        // puts them over the document rather than over the whole window.
         self.menu_bar(ui, &p);
-        if self.prefs.show_toolbar {
+
+        if !self.home.visible {
+            self.tool_rail(ui, &p);
+            self.nav_sidebar(ui, &p);
+        }
+        self.side_panel(ui, &p);
+        self.dock_panel(ui, &p);
+
+        // The toolbar acts on a document, so on home it would be a full row of
+        // greyed-out controls. The menu bar still covers everything reachable
+        // without one.
+        if self.prefs.show_toolbar && !self.home.visible {
             self.toolbar(ui, &p);
         }
         self.tab_strip(ui, &p);
         if self.prefs.show_status_bar {
             self.status_bar(ui, &p);
         }
-        self.side_panel(ui, &p);
 
+
+        // Set by the home screen's action cards; dispatched once the central
+        // panel has given back its borrow on `self`.
+        let mut home_command: Option<Command> = None;
         let action = egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(p.canvas))
+            .frame(
+                egui::Frame::new()
+                    .fill(p.canvas)
+                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .corner_radius(egui::CornerRadius::same(theme::RADIUS_GLASS))
+                    .outer_margin(egui::Margin::same(theme::GLASS_INSET)),
+            )
             .show(ui, |ui| {
-                if self.tabs.is_empty() {
-                    let recent = self.prefs.recent.clone();
-                    let mut queued = Vec::new();
-                    welcome(ui, &p, &recent, |path| queued.push(path));
-                    self.startup_files.extend(queued);
+                if self.home.visible {
+                    match crate::home::show(ui, &p, &mut self.home, &self.prefs) {
+                        crate::home::Action::None => {}
+                        // Queued rather than opened here: `open_path` needs
+                        // `&mut self` and the central panel is still borrowing
+                        // it. The queue is drained a few lines below.
+                        crate::home::Action::Open(path) => self.startup_files.push(path),
+                        crate::home::Action::Run(command) => home_command = Some(command),
+                    }
                     return ViewerAction::None;
                 }
                 let index = self.active;
@@ -1547,8 +2247,11 @@ impl eframe::App for App {
             })
             .inner;
         self.handle_viewer_action(action, ctx);
+        if let Some(cmd) = home_command {
+            self.dispatch(cmd, ctx);
+        }
 
-        // Anything the welcome screen queued.
+        // Anything the home screen queued.
         let queued = std::mem::take(&mut self.startup_files);
         for f in queued {
             self.open_path(&f, None);
@@ -1584,58 +2287,40 @@ impl eframe::App for App {
     }
 }
 
-/// The screen shown when nothing is open.
-fn welcome(
-    ui: &mut egui::Ui,
-    p: &Palette,
-    recent: &[quark_core::prefs::RecentFile],
-    mut open: impl FnMut(PathBuf),
-) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(80.0);
-        ui.label(RichText::new("Quark").size(40.0).color(p.accent_text));
-        ui.label(
-            RichText::new("Open a PDF to begin")
-                .size(14.0)
-                .color(p.text_muted),
-        );
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("Drop a file here, or press Ctrl+O")
-                .size(12.0)
-                .color(p.text_faint),
-        );
-        ui.add_space(24.0);
 
-        if !recent.is_empty() {
-            ui.label(
-                RichText::new(widgets::micro_caps("Recent"))
-                    .size(10.0)
-                    .color(p.text_faint),
-            );
-            ui.add_space(6.0);
-            for r in recent.iter().take(10) {
-                let path = PathBuf::from(&r.path);
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| r.path.clone());
-                // A file that has been moved or deleted is shown but not
-                // offered, which is clearer than a click that does nothing.
-                let exists = path.exists();
-                let response = ui.add_enabled(
-                    exists,
-                    egui::Button::new(
-                        RichText::new(widgets::elide(&name, 60, true))
-                            .size(12.0)
-                            .color(if exists { p.text } else { p.text_faint }),
-                    )
-                    .min_size(egui::vec2(320.0, 0.0)),
-                );
-                if response.clicked() {
-                    open(path);
-                }
-            }
-        }
-    });
-}
+/// The tools the rail offers, in order.
+///
+/// Not every tool Quark has — the rail is for the ones reached constantly while
+/// reading and marking up. The rest stay in the Tools menu and the command
+/// palette, because a rail of thirty icons is a menu that pretends to be a
+/// toolbar.
+const TOOL_RAIL: [(Tool, Icon, &str); 7] = [
+    (Tool::Select, Icon::Cursor, "Select"),
+    (Tool::Pan, Icon::Hand, "Pan"),
+    (Tool::Highlight, Icon::Highlight, "Highlight"),
+    (Tool::Note, Icon::Note, "Note"),
+    (Tool::Ink, Icon::Pen, "Draw"),
+    (Tool::Rectangle, Icon::Square, "Shapes"),
+    (Tool::Redact, Icon::Redact, "Redact"),
+];
+
+/// The structural panels the nav sidebar switches between.
+///
+/// Comments is deliberately absent: it lives in the right dock with the
+/// assistant, because both are a conversation about the document rather than a
+/// view of its structure.
+const NAV_PANELS: [(SidePanel, Icon, &str); 5] = [
+    (SidePanel::Thumbnails, Icon::Thumbnails, "Thumbnails"),
+    (SidePanel::Bookmarks, Icon::Bookmark, "Outline"),
+    (SidePanel::Fields, Icon::Fields, "Form fields"),
+    (SidePanel::Attachments, Icon::Attachment, "Attachments"),
+    (SidePanel::Layers, Icon::Layers, "Layers"),
+];
+
+
+/// Width reserved for the toolbar's centred group.
+///
+/// Fixed rather than measured: the group is placed at an explicit rect so it
+/// stays on the bar's centre line no matter how long the filename on the left
+/// or the icon set on the right becomes.
+const CENTRE_GROUP_WIDTH: f32 = 420.0;

@@ -155,8 +155,7 @@ mod win {
         Ok(())
     }
 
-    pub(super) fn register() -> Result<(), ShellError> {
-        let exe = exe_path()?;
+    pub(super) fn register_exe(exe: &Path) -> Result<(), ShellError> {
         let exe_str = exe.display().to_string();
 
         // 1. The ProgID: what the file type *is*, and how to open it.
@@ -333,6 +332,212 @@ mod win {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "quark.exe".into())
     }
+
+    use windows::Win32::Security::Credentials::{
+        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree,
+        CredReadW, CredWriteW,
+    };
+
+    /// Stores a secret under `target`, replacing any existing one.
+    pub(super) fn store_secret(target: &str, secret: &str) -> Result<(), ShellError> {
+        let target_w = wide(target);
+        // The blob is bytes, not a string: the API does not assume an encoding,
+        // and UTF-8 is what we read back.
+        let mut blob = secret.as_bytes().to_vec();
+        let cred = CREDENTIALW {
+            Type: CRED_TYPE_GENERIC,
+            TargetName: windows::core::PWSTR(target_w.as_ptr() as *mut u16),
+            CredentialBlobSize: blob.len() as u32,
+            CredentialBlob: blob.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            ..Default::default()
+        };
+        // SAFETY: `cred` points at buffers that outlive the call, and the
+        // lengths match the buffers they describe.
+        unsafe { CredWriteW(&cred, 0) }
+            .map_err(|e| ShellError::Shell(format!("could not store the credential: {e}")))
+    }
+
+    pub(super) fn load_secret(target: &str) -> Result<Option<String>, ShellError> {
+        let target_w = wide(target);
+        let mut ptr = std::ptr::null_mut();
+        // SAFETY: `ptr` receives an allocation the API owns; it is freed with
+        // `CredFree` below on every path that gets one.
+        let read = unsafe {
+            CredReadW(
+                windows::core::PCWSTR(target_w.as_ptr()),
+                CRED_TYPE_GENERIC,
+                None,
+                &mut ptr,
+            )
+        };
+        if read.is_err() || ptr.is_null() {
+            // Not found is the ordinary first-run case, not a failure.
+            return Ok(None);
+        }
+        // SAFETY: the call above succeeded, so `ptr` is a valid CREDENTIALW
+        // whose blob pointer and length the API filled in.
+        let secret = unsafe {
+            let cred = &*ptr;
+            let bytes =
+                std::slice::from_raw_parts(cred.CredentialBlob, cred.CredentialBlobSize as usize);
+            let s = String::from_utf8_lossy(bytes).into_owned();
+            CredFree(ptr as *const _);
+            s
+        };
+        Ok(Some(secret))
+    }
+
+    pub(super) fn delete_secret(target: &str) -> Result<(), ShellError> {
+        let target_w = wide(target);
+        // SAFETY: the pointer is a valid null-terminated wide string.
+        let _ = unsafe {
+            CredDeleteW(
+                windows::core::PCWSTR(target_w.as_ptr()),
+                CRED_TYPE_GENERIC,
+                None,
+            )
+        };
+        // Deleting something that was never stored is success, not an error:
+        // callers use this to clear a key that may or may not be set.
+        Ok(())
+    }
+}
+
+
+/// Stores an API key in the Windows Credential Manager.
+///
+/// # Why not settings.toml
+///
+/// Quark's preferences are plaintext TOML in the user's profile. An API key
+/// there is readable by anything that can read the file, ends up in backups and
+/// in any support bundle, and survives uninstalling the application. The
+/// credential manager encrypts at rest with the user's own credentials and is
+/// the mechanism Windows provides for exactly this.
+///
+/// `target` is the credential name, e.g. `quark/anthropic`.
+pub fn store_secret(target: &str, secret: &str) -> Result<(), ShellError> {
+    #[cfg(windows)]
+    {
+        win::store_secret(target, secret)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (target, secret);
+        Err(ShellError::NotWindows)
+    }
+}
+
+/// Reads a stored API key back.
+///
+/// `Ok(None)` means there is no credential under that name — a first run, not
+/// a failure.
+pub fn load_secret(target: &str) -> Result<Option<String>, ShellError> {
+    #[cfg(windows)]
+    {
+        win::load_secret(target)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        Err(ShellError::NotWindows)
+    }
+}
+
+/// Removes a stored API key. Deleting one that is not there is not an error.
+pub fn delete_secret(target: &str) -> Result<(), ShellError> {
+    #[cfg(windows)]
+    {
+        win::delete_secret(target)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        Err(ShellError::NotWindows)
+    }
+}
+
+/// Where a per-user install of Quark lives.
+///
+/// `%LOCALAPPDATA%\Programs\Quark`, which is the convention for a per-user
+/// install that needs no elevation and is where Windows expects to find one.
+pub fn install_dir() -> Result<PathBuf, ShellError> {
+    let base = std::env::var("LOCALAPPDATA")
+        .map_err(|_| ShellError::Shell("LOCALAPPDATA is not set".into()))?;
+    Ok(PathBuf::from(base).join("Programs").join(APP_NAME))
+}
+
+/// The files an install needs beside the executable.
+///
+/// PDFium is not optional: it is the first thing `quark_pdf::engine` looks for,
+/// and an installed Quark without it starts and then fails to open anything.
+const PAYLOAD: &[&str] = &["pdfium.dll", "LICENSE-pdfium"];
+
+/// Copies Quark into [`install_dir`] and registers *that* copy as the handler.
+///
+/// # Why this exists
+///
+/// Registering the executable where it happens to be built points the shell at
+/// a path inside build output. A `cargo clean` then deletes the handler out
+/// from under Windows: file associations silently stop working and the taskbar
+/// pin disappears, because Windows drops a pin whose target is gone. Copying to
+/// a stable location first means the repository can be cleaned, moved or
+/// deleted without touching the installation.
+///
+/// Returns the directory it installed into.
+pub fn install() -> Result<PathBuf, ShellError> {
+    #[cfg(windows)]
+    {
+        let source_exe = exe_path()?;
+        let source_dir = source_exe
+            .parent()
+            .ok_or_else(|| ShellError::NoExe("the executable has no parent".into()))?;
+        let dir = install_dir()?;
+        let dest_exe = dir.join("quark.exe");
+
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| ShellError::Shell(format!("creating {}: {e}", dir.display())))?;
+
+        // Re-running the installed copy is a repair, not a copy: Windows locks
+        // a running executable, so copying it onto itself fails. Registering is
+        // still worth doing, which is what makes `--install` idempotent.
+        if source_exe != dest_exe {
+            std::fs::copy(&source_exe, &dest_exe).map_err(|e| {
+                ShellError::Shell(format!(
+                    "copying Quark to {}: {e}. Close any running copy and try again",
+                    dest_exe.display()
+                ))
+            })?;
+        }
+
+        for name in PAYLOAD {
+            let from = source_dir.join(name);
+            if !from.exists() {
+                // Only PDFium is fatal; the licence file is a courtesy.
+                if *name == "pdfium.dll" {
+                    return Err(ShellError::Shell(format!(
+                        "{} is missing from {}. Install from a staged `dist` folder, \
+                         not straight out of `target`",
+                        name,
+                        source_dir.display()
+                    )));
+                }
+                continue;
+            }
+            let to = dir.join(name);
+            if from != to {
+                std::fs::copy(&from, &to)
+                    .map_err(|e| ShellError::Shell(format!("copying {name}: {e}")))?;
+            }
+        }
+
+        win::register_exe(&dest_exe)?;
+        Ok(dir)
+    }
+    #[cfg(not(windows))]
+    {
+        Err(ShellError::NotWindows)
+    }
 }
 
 /// Registers Quark as a PDF handler for the current user.
@@ -342,7 +547,7 @@ mod win {
 pub fn register() -> Result<(), ShellError> {
     #[cfg(windows)]
     {
-        win::register()
+        win::register_exe(&exe_path()?)
     }
     #[cfg(not(windows))]
     {
@@ -388,9 +593,74 @@ pub fn print_document(path: &Path) -> Result<(), ShellError> {
     }
 }
 
+/// Attaches Quark to the console it was launched from, if there is one.
+///
+/// In release Quark is a GUI-subsystem binary, which is what stops Windows
+/// opening an empty terminal behind the window when a PDF is double-clicked.
+/// The cost is that such a process starts with no standard output at all, so
+/// `--version`, `--help` and the registration flags would otherwise print into
+/// nothing. Borrowing the parent's console gives them somewhere to write on the
+/// one path where a user can actually read it.
+///
+/// Returns `false` when there was no console to attach to. That is the normal
+/// case for a double-click from Explorer, not an error.
+pub fn attach_parent_console() -> bool {
+    #[cfg(windows)]
+    {
+        // SAFETY: `AttachConsole` takes no pointers and borrows nothing. It
+        // fails harmlessly when the parent has no console, or when this
+        // process already has one.
+        unsafe {
+            windows::Win32::System::Console::AttachConsole(
+                windows::Win32::System::Console::ATTACH_PARENT_PROCESS,
+            )
+            .is_ok()
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // Everywhere else a process simply inherits its parent's stdio.
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_install_directory_is_a_per_user_programs_folder() {
+        // Per-user so it needs no elevation, and under Programs because that is
+        // where Windows and every other per-user app put themselves.
+        let Ok(dir) = install_dir() else {
+            // No LOCALAPPDATA (a bare CI container); nothing to assert.
+            return;
+        };
+        let s = dir.display().to_string();
+        assert!(s.ends_with("Quark"), "{s}");
+        assert!(s.contains("Programs"), "{s}");
+    }
+
+    #[test]
+    fn the_install_carries_pdfium_with_it() {
+        // An installed Quark without PDFium starts and then fails to open
+        // anything, which is a worse failure than not installing at all.
+        assert!(
+            PAYLOAD.contains(&"pdfium.dll"),
+            "the install would leave PDFium behind"
+        );
+    }
+
+    #[test]
+    fn the_registered_command_quotes_the_path_and_the_argument() {
+        // Program Files and LOCALAPPDATA both contain spaces on plenty of
+        // machines; an unquoted command breaks on every one of them.
+        let exe = Path::new(r"C:\Users\a b\AppData\Local\Programs\Quark\quark.exe");
+        let cmd = open_command(exe);
+        assert!(cmd.starts_with('"'), "{cmd}");
+        assert!(cmd.contains(r#"" "%1""#), "{cmd}");
+        assert!(print_command(exe).contains("--print"));
+    }
 
     #[test]
     fn the_open_command_quotes_the_argument() {
@@ -440,5 +710,44 @@ mod tests {
             print_document(Path::new("/tmp/x.pdf")),
             Err(ShellError::NotWindows)
         ));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod credential_tests {
+    use super::*;
+
+    /// A name no real install uses, so a failed run cannot clobber a real key.
+    const TEST_TARGET: &str = "quark/test-credential-roundtrip";
+
+    #[test]
+    fn a_secret_round_trips_through_the_credential_manager() {
+        // This is the whole point of the mechanism: if it does not come back
+        // byte-for-byte, keys silently stop working after a restart.
+        let secret = "sk-ant-test-\u{00e9}\u{4e2d}-0123456789";
+        store_secret(TEST_TARGET, secret).expect("store");
+        let back = load_secret(TEST_TARGET).expect("load");
+        assert_eq!(back.as_deref(), Some(secret));
+
+        delete_secret(TEST_TARGET).expect("delete");
+        assert_eq!(
+            load_secret(TEST_TARGET).expect("load after delete"),
+            None,
+            "the credential outlived its deletion"
+        );
+    }
+
+    #[test]
+    fn an_absent_credential_reads_as_none_rather_than_an_error() {
+        // First run has no key stored. Treating that as a failure would show
+        // an error dialog to every new user.
+        let missing = load_secret("quark/test-definitely-not-stored").expect("load");
+        assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn deleting_something_that_was_never_stored_is_not_an_error() {
+        // Callers clear a key that may or may not be set.
+        delete_secret("quark/test-definitely-not-stored").expect("delete");
     }
 }

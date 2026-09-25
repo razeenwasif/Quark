@@ -341,7 +341,13 @@ fn dist(extra: &[String]) -> Result<()> {
 
 /// A one-click registration script for the staged folder.
 const INSTALL_CMD: &str = r#"@echo off
-rem Registers Quark as a PDF handler for the current user.
+rem Installs Quark for the current user and registers it as a PDF handler.
+rem
+rem Quark is copied into %LOCALAPPDATA%\Programs\Quark first, and it is that
+rem copy that gets registered. Registering the executable where it was built
+rem would point Windows at a path inside build output, so cleaning the build
+rem directory would silently break the file associations and drop the taskbar
+rem pin. Installing first means this folder can be deleted afterwards.
 rem
 rem This does not silently take over the .pdf association: Windows protects
 rem that choice and only the user can make it. After this runs, Quark appears
@@ -349,13 +355,14 @@ rem in the "Open with" menu and in Settings > Default apps, and Windows will
 rem offer it the next time a PDF is opened.
 setlocal
 set HERE=%~dp0
-"%HERE%quark.exe" --register
+"%HERE%quark.exe" --install
 if errorlevel 1 (
-  echo Registration failed.
+  echo Installation failed.
   exit /b 1
 )
 echo.
-echo Quark is registered.
+echo Quark is installed and registered.
+echo Pin it from %LOCALAPPDATA%\Programs\Quark, not from this folder.
 echo.
 echo To make it the default PDF reader, either:
 echo   * right-click any PDF, choose "Open with" then "Choose another app",
@@ -476,7 +483,7 @@ mod tests {
     fn the_install_script_does_not_claim_to_set_the_default() {
         // Windows does not permit it, and saying otherwise would be a lie the
         // user discovers only when it silently does not happen.
-        assert!(INSTALL_CMD.contains("--register"));
+        assert!(INSTALL_CMD.contains("--install"));
         assert!(INSTALL_CMD.to_lowercase().contains("default apps"));
     }
 }

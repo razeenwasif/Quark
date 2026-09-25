@@ -75,6 +75,17 @@ pub struct Prefs {
     pub tint: PageTint,
     pub side_panel: SidePanel,
     pub side_panel_width: f32,
+    /// Width of the right-hand dock that holds comments and the assistant.
+    pub dock_width: f32,
+    /// Which assistant backend to use. The key that goes with it lives in the
+    /// OS credential store, never here — this file is plaintext.
+    pub ai_backend: String,
+    pub ai_model: String,
+    /// How much of the document to send. See `quark_ai::Scope`.
+    pub ai_scope: String,
+    /// Base URL for the OpenAI-compatible backend, so one client can serve
+    /// OpenAI, Groq, OpenRouter and the rest.
+    pub ai_base_url: String,
     pub show_toolbar: bool,
     pub show_status_bar: bool,
     pub tool_style: ToolStyle,
@@ -108,6 +119,13 @@ impl Default for Prefs {
             tint: PageTint::None,
             side_panel: SidePanel::Thumbnails,
             side_panel_width: 240.0,
+            dock_width: 266.0,
+            // Local by default: the first question a user asks must not
+            // silently ship their document to a third party.
+            ai_backend: "ollama".into(),
+            ai_model: "llama3.2".into(),
+            ai_scope: "nearby".into(),
+            ai_base_url: "https://api.openai.com/v1".into(),
             show_toolbar: true,
             show_status_bar: true,
             tool_style: ToolStyle::default(),

@@ -59,23 +59,44 @@ pub fn search_paths() -> Vec<PathBuf> {
         }
     }
 
-    // 3. The vendored copies in the source tree, so a `cargo test` from the
-    //    repo root works with no setup.
+    // 3. A vendored copy in the source tree, so a `cargo test` or a freshly
+    //    built `target/release/quark.exe` works with no setup.
     let vendor = if cfg!(windows) {
         "vendor/pdfium"
     } else {
         "vendor/pdfium-linux"
     };
     out.push(PathBuf::from(vendor).join(name));
+
+    // Walk up from a starting directory looking for `vendor/`.
+    //
+    // Done from the executable as well as the working directory. Tests run
+    // from inside a crate directory, so the working directory finds it — but a
+    // binary in `target/release` is launched from wherever the user happens to
+    // be, and walking up from *there* leaves the repository entirely. That is
+    // how opening a PDF failed with the vendored library sitting in the source
+    // tree three levels above the executable the whole time.
+    let mut walk_up = |start: &Path| {
+        let mut dir = Some(start);
+        while let Some(d) = dir {
+            out.push(d.join(vendor).join(name));
+            dir = d.parent();
+        }
+    };
     if let Ok(cwd) = std::env::current_dir() {
-        out.push(cwd.join(vendor).join(name));
-        // Walk up: tests often run from inside a crate directory.
-        let mut d = cwd.as_path();
-        while let Some(parent) = d.parent() {
-            out.push(parent.join(vendor).join(name));
-            d = parent;
+        walk_up(&cwd);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            walk_up(dir);
         }
     }
+
+    // The two walks overlap whenever Quark is run from inside its own tree,
+    // and a candidate list that repeats itself makes the "tried:" message in
+    // the error harder to read than it needs to be.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.clone()));
 
     out
 }
@@ -187,6 +208,47 @@ mod tests {
         assert!(joined.contains("vendor/pdfium"), "vendor dir missing: {joined}");
     }
 
+
+    #[test]
+    fn the_vendor_tree_is_searched_from_the_executable_not_just_the_cwd() {
+        // The regression this pins: the vendor walk used to start only at the
+        // working directory, so `target/release/quark.exe` launched from
+        // somewhere else walked up that other tree and never saw the library
+        // sitting three levels above itself.
+        let _g = crate::testutil::pdfium_guard();
+        let paths = search_paths();
+
+        let exe = std::env::current_exe().expect("a test binary has a path");
+        let mut ancestor = exe.parent();
+        let mut found = false;
+        while let Some(dir) = ancestor {
+            let candidate = dir.join(if cfg!(windows) {
+                "vendor/pdfium"
+            } else {
+                "vendor/pdfium-linux"
+            });
+            if paths.iter().any(|p| p.starts_with(&candidate)) {
+                found = true;
+                break;
+            }
+            ancestor = dir.parent();
+        }
+        assert!(
+            found,
+            "no candidate walks up from the executable at {}",
+            exe.display()
+        );
+    }
+
+    #[test]
+    fn the_candidate_list_does_not_repeat_itself() {
+        // Running from inside the tree makes the two walks overlap, and the
+        // duplicates end up in the user-facing "tried:" error message.
+        let _g = crate::testutil::pdfium_guard();
+        let paths = search_paths();
+        let unique: std::collections::HashSet<_> = paths.iter().collect();
+        assert_eq!(unique.len(), paths.len(), "duplicates in {paths:?}");
+    }
     #[test]
     fn an_override_takes_priority_over_everything_else() {
         let _g = crate::testutil::pdfium_guard();
