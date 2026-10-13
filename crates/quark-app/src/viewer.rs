@@ -106,17 +106,23 @@ pub fn show(
         let key = PageKey::new(*index, tab.layout.scale, tab.rotation, prefs.tint);
         match textures.get_nearest(*index, &key) {
             Some(tex) => {
-                painter.image(
-                    tex.id(),
-                    screen,
-                    ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                    Color32::WHITE,
+                painter.add(
+                    egui::epaint::RectShape::filled(
+                        screen,
+                        CornerRadius::same(quark_ui::theme::RADIUS_PAGE),
+                        Color32::WHITE,
+                    )
+                    .with_texture(tex.id(), ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
                 );
             }
             None => {
                 // A blank sheet reads as "loading" far better than an empty
                 // hole in the canvas.
-                painter.rect_filled(screen, CornerRadius::same(2), Color32::WHITE);
+                painter.rect_filled(
+                    screen,
+                    CornerRadius::same(quark_ui::theme::RADIUS_PAGE),
+                    Color32::WHITE,
+                );
                 let label = if textures.is_pending(&key) {
                     format!("Rendering page {}…", index + 1)
                 } else {
@@ -150,18 +156,31 @@ pub fn show(
 }
 
 /// The paper, its shadow and its edge.
+///
+/// Two shadows: a wide soft one that lifts the sheet off the canvas, and a
+/// tight one that grounds its edge. The hairline only matters on the light
+/// canvas, where a white page would otherwise have no edge at all.
 fn paint_page_chrome(painter: &Painter, p: &Palette, screen: ERect) {
-    painter.rect_filled(
-        screen.translate(vec2(0.0, 3.0)).expand(1.0),
-        CornerRadius::same(3),
-        p.page_shadow,
-    );
-    painter.rect_stroke(
-        screen,
-        CornerRadius::same(2),
-        Stroke::new(1.0, p.page_border),
-        egui::StrokeKind::Outside,
-    );
+    let radius = CornerRadius::same(quark_ui::theme::RADIUS_PAGE);
+    for (offset, blur, strength) in [(18, 48, 0.8), (3, 10, 0.6)] {
+        painter.add(
+            egui::epaint::Shadow {
+                offset: [0, offset],
+                blur,
+                spread: 0,
+                color: p.page_shadow.gamma_multiply(strength),
+            }
+            .as_shape(screen, radius),
+        );
+    }
+    if !p.is_dark() {
+        painter.rect_stroke(
+            screen,
+            radius,
+            Stroke::new(1.0, p.page_border),
+            egui::StrokeKind::Outside,
+        );
+    }
 }
 
 /// Asks the worker for any page raster the next few frames will need.
@@ -1157,8 +1176,9 @@ fn thumb(track_len: f32, view: f32, content: f32, offset: f32) -> (f32, f32) {
 
 
 /// Thickness of a scrollbar, and how far it sits from the canvas edge.
-const BAR: f32 = 9.0;
-const BAR_PAD: f32 = 3.0;
+const BAR: f32 = 8.0;
+/// Far enough in that the bars clear the rounded corners of the canvas well.
+const BAR_PAD: f32 = 7.0;
 /// A thumb shorter than this is impossible to grab.
 const MIN_THUMB: f32 = 28.0;
 
@@ -1251,12 +1271,12 @@ fn bar(
     // The track only appears on hover: a permanently visible one is a heavy
     // frame around a document that is meant to be the focus.
     if hovered {
-        painter.rect_filled(track, radius, p.card_hover);
+        painter.rect_filled(track, radius, p.wash(0x0c));
     }
     painter.rect_filled(
         thumb,
         radius,
-        if hovered { p.accent } else { p.text_faint },
+        if hovered { p.text_muted } else { p.wash(0x30) },
     );
 
     if response.dragged() || response.clicked() {

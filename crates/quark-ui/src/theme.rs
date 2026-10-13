@@ -1,9 +1,14 @@
-//! Quark's design system.
+//! Quark's design system: Velvet.
 //!
-//! Flat, not glass. Panels are opaque and sit flush against each other,
-//! separated by a single hairline; there is no lit ground behind them and
-//! nothing floats. Depth comes from the hierarchy of the fills — rail, nav,
-//! panel, canvas — rather than from translucency and shadow.
+//! Soft, not flat. Every surface is a rounded island floating on a deep
+//! ground, with a diffuse shadow under it and a one-pixel sheen along its top
+//! edge — the light a velvet nap catches. Nothing has a square corner: pages,
+//! thumbnails, controls, panels and the window itself are all rounded, on one
+//! scale ([`RADIUS_PAGE`] up to [`RADIUS_DIALOG`]).
+//!
+//! Depth reads in three steps: the **canvas** is recessed below the ground,
+//! **islands** (tools, pages, dock) sit on it, and **floating** surfaces
+//! (menus, dialogs, toasts, the page capsule) hover above everything.
 //!
 //! The **page is paper, not chrome**. It stays white in both themes and its
 //! own colours never follow the palette, or a dark theme would print light
@@ -11,7 +16,9 @@
 //!
 //! Contrast is checked against the panel fill a token actually sits on.
 
-use egui::{Color32, CornerRadius, Stroke, Visuals};
+use std::sync::Arc;
+
+use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, Visuals};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeMode {
@@ -36,35 +43,43 @@ impl ThemeMode {
 /// Semantic colour tokens, named by role rather than by appearance.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
-    /// The far-left tool rail. Dark in both themes — it is the app frame, not
-    /// a surface, and the reference keeps it constant while everything else
-    /// flips.
+    /// The tool dock. An island like the others now, so it matches `card`.
     pub rail: Color32,
-    /// Inactive icon on the rail. Cannot be `text_muted`: that is tuned for a
-    /// panel fill, and on the dark rail it disappears in the light theme.
+    /// Inactive icon in the tool dock.
     pub rail_icon: Color32,
-    /// Window ground, behind everything.
+    /// Window ground, behind every island.
     pub ground: Color32,
-    /// The scrolling document canvas that pages sit on.
+    /// The recessed well the pages sit in — the darkest surface, so a white
+    /// page is unmistakably the brightest thing on screen.
     pub canvas: Color32,
-    /// Translucent panel fill — toolbars, side panels, the status bar.
+    /// Island fill — the tool dock, the pages panel, the dock, home.
     pub card: Color32,
+    /// Hover, and the raised segment of a segmented control.
     pub card_hover: Color32,
-    /// Menus, popovers and dialogs, one step above a card.
+    /// Menus, popovers, dialogs, toasts and the active tab: one step above an
+    /// island.
     pub popover: Color32,
-    /// Hairline between and around panels.
+    /// Hairline around an island. Translucent white, so it reads as an edge
+    /// catching light rather than as a drawn outline.
     pub border: Color32,
-    /// Inset highlight along a panel's top edge.
+    /// The sheen along an island's top edge.
     pub highlight: Color32,
+    /// Fill for recessed controls: segment tracks, text fields, the composer.
+    pub recess: Color32,
 
     pub text: Color32,
     pub text_muted: Color32,
     pub text_faint: Color32,
+    /// A control that cannot be used right now. Deliberately below the text
+    /// contrast floor: it is not meant to be read, only seen to be absent.
+    pub text_disabled: Color32,
 
-    /// The brand purple, used for selection and active state.
+    /// Selection, the active tool, primary buttons.
     pub accent: Color32,
     pub accent_soft: Color32,
     pub accent_text: Color32,
+    /// Text and icons drawn on a solid `accent` fill.
+    pub on_accent: Color32,
 
     pub warning: Color32,
     pub error: Color32,
@@ -87,78 +102,79 @@ pub struct Palette {
 
 impl Palette {
     pub const DARK: Palette = Palette {
-        rail: Color32::from_rgb(0x13, 0x13, 0x16),
-        rail_icon: Color32::from_rgb(0x7e, 0x7e, 0x88),
-        // Flat, not glass. The redesign puts opaque panels edge to edge and
-        // separates them with a hairline, so there is no lit ground behind
-        // them and nothing for a translucent fill to pick up.
-        ground: Color32::from_rgb(0x0f, 0x0f, 0x12),
-        // The canvas a page sits on. Far below the paper so a white page is
-        // unmistakably the brightest thing on screen.
-        canvas: Color32::from_rgb(0x0f, 0x0f, 0x12),
+        rail: Color32::from_rgb(0x17, 0x15, 0x1d),
+        rail_icon: Color32::from_rgb(0xaa, 0xa4, 0xb6),
+        // Near-black with a violet cast; the cast is what makes the darks read
+        // as plush rather than as a dead grey.
+        ground: Color32::from_rgb(0x0e, 0x0d, 0x12),
+        canvas: Color32::from_rgb(0x09, 0x08, 0x0c),
 
-        // Opaque: a panel that lets the canvas through puts document pixels
-        // behind toolbar text.
-        card: Color32::from_rgb(0x1c, 0x1c, 0x21),
-        card_hover: Color32::from_rgb(0x23, 0x23, 0x29),
-        popover: Color32::from_rgb(0x1c, 0x1c, 0x21),
-        // The hairline that does all the separating now that panels are flat.
-        border: Color32::from_rgb(0x2c, 0x2c, 0x33),
-        highlight: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0x0e),
+        card: Color32::from_rgb(0x17, 0x15, 0x1d),
+        card_hover: Color32::from_rgb(0x24, 0x21, 0x2d),
+        popover: Color32::from_rgb(0x1e, 0x1b, 0x26),
+        border: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0x0f),
+        highlight: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0x0c),
+        recess: Color32::from_rgba_unmultiplied_const(0x00, 0x00, 0x00, 0x47),
 
-        text: Color32::from_rgb(0xea, 0xea, 0xef),
-        text_muted: Color32::from_rgb(0x9d, 0x9d, 0xa8),
-        text_faint: Color32::from_rgb(0x6d, 0x6d, 0x78),
+        text: Color32::from_rgb(0xed, 0xe9, 0xf3),
+        text_muted: Color32::from_rgb(0xaa, 0xa4, 0xb6),
+        text_faint: Color32::from_rgb(0x85, 0x7f, 0x92),
+        text_disabled: Color32::from_rgb(0x4c, 0x47, 0x57),
 
-        accent: Color32::from_rgb(0xa8, 0x55, 0xf7),
-        accent_soft: Color32::from_rgba_unmultiplied_const(0xc0, 0x84, 0xfc, 0x2b),
-        accent_text: Color32::from_rgb(0xc0, 0x84, 0xfc),
+        // Amethyst. Solid fills carry dark text: white on this lilac is only
+        // 3:1, the near-black is over 6:1.
+        accent: Color32::from_rgb(0x9d, 0x7b, 0xff),
+        accent_soft: Color32::from_rgba_unmultiplied_const(0x9d, 0x7b, 0xff, 0x29),
+        accent_text: Color32::from_rgb(0xc6, 0xb2, 0xff),
+        on_accent: Color32::from_rgb(0x12, 0x0e, 0x1c),
 
-        warning: Color32::from_rgb(0xfb, 0xbf, 0x24),
-        error: Color32::from_rgb(0xfb, 0x71, 0x85),
-        success: Color32::from_rgb(0x4a, 0xde, 0x80),
+        warning: Color32::from_rgb(0xf1, 0xbd, 0x6a),
+        error: Color32::from_rgb(0xf3, 0x8b, 0xa0),
+        success: Color32::from_rgb(0x7a, 0xd7, 0xa8),
 
-        page_shadow: Color32::from_black_alpha(0x9c),
-        page_border: Color32::from_rgba_unmultiplied_const(0x00, 0x00, 0x00, 0x80),
-        selection: Color32::from_rgba_unmultiplied_const(0x7c, 0x5c, 0xff, 0x59),
+        page_shadow: Color32::from_black_alpha(0xa6),
+        page_border: Color32::from_rgba_unmultiplied_const(0x00, 0x00, 0x00, 0x66),
+        selection: Color32::from_rgba_unmultiplied_const(0x7c, 0x5c, 0xff, 0x4d),
         search_current: Color32::from_rgba_unmultiplied_const(0xf9, 0x73, 0x16, 0x99),
         search_other: Color32::from_rgba_unmultiplied_const(0xfb, 0xbf, 0x24, 0x66),
-        field_highlight: Color32::from_rgba_unmultiplied_const(0x6c, 0x8c, 0xff, 0x33),
-        field_required: Color32::from_rgba_unmultiplied_const(0xfb, 0x71, 0x85, 0x3d),
+        field_highlight: Color32::from_rgba_unmultiplied_const(0x9d, 0x7b, 0xff, 0x33),
+        field_required: Color32::from_rgba_unmultiplied_const(0xf3, 0x8b, 0xa0, 0x3d),
     };
 
     pub const LIGHT: Palette = Palette {
-        rail: Color32::from_rgb(0x1c, 0x1c, 0x1f),
-        rail_icon: Color32::from_rgb(0x8b, 0x8b, 0x93),
-        ground: Color32::from_rgb(0xf4, 0xf4, 0xf1),
-        // Deliberately a shade darker than it looks in the reference: a white
-        // page has to stand off the canvas without a border doing the work,
-        // and anything lighter than this drops below the 1.2:1 the test wants.
-        canvas: Color32::from_rgb(0xea, 0xea, 0xe5),
+        rail: Color32::from_rgb(0xff, 0xff, 0xff),
+        rail_icon: Color32::from_rgb(0x5f, 0x5a, 0x6b),
+        ground: Color32::from_rgb(0xee, 0xed, 0xf2),
+        // A shade darker than the ground, recessed the same way the dark well
+        // is, and still far enough below white for a page to stand off it.
+        canvas: Color32::from_rgb(0xe3, 0xe1, 0xe9),
         card: Color32::from_rgb(0xff, 0xff, 0xff),
-        card_hover: Color32::from_rgb(0xf5, 0xf5, 0xf1),
+        card_hover: Color32::from_rgb(0xf1, 0xef, 0xf6),
         popover: Color32::from_rgb(0xff, 0xff, 0xff),
-        border: Color32::from_rgb(0xe6, 0xe6, 0xe1),
+        border: Color32::from_rgba_unmultiplied_const(0x2a, 0x1b, 0x50, 0x1a),
         highlight: Color32::from_rgba_unmultiplied_const(0xff, 0xff, 0xff, 0x00),
+        recess: Color32::from_rgba_unmultiplied_const(0x2a, 0x1b, 0x50, 0x0f),
 
-        text: Color32::from_rgb(0x18, 0x18, 0x1b),
-        text_muted: Color32::from_rgb(0x6b, 0x6b, 0x74),
-        text_faint: Color32::from_rgb(0x9a, 0x9a, 0xa2),
+        text: Color32::from_rgb(0x18, 0x16, 0x1f),
+        text_muted: Color32::from_rgb(0x5f, 0x5a, 0x6b),
+        text_faint: Color32::from_rgb(0x72, 0x6d, 0x7e),
+        text_disabled: Color32::from_rgb(0xbd, 0xb9, 0xc6),
 
-        accent: Color32::from_rgb(0x93, 0x33, 0xea),
-        accent_soft: Color32::from_rgba_unmultiplied_const(0x93, 0x33, 0xea, 0x1f),
-        accent_text: Color32::from_rgb(0x7e, 0x22, 0xce),
+        accent: Color32::from_rgb(0x7c, 0x5c, 0xe0),
+        accent_soft: Color32::from_rgba_unmultiplied_const(0x7c, 0x5c, 0xe0, 0x24),
+        accent_text: Color32::from_rgb(0x63, 0x42, 0xc9),
+        on_accent: Color32::from_rgb(0xff, 0xff, 0xff),
 
         warning: Color32::from_rgb(0xb4, 0x53, 0x09),
         error: Color32::from_rgb(0xbe, 0x12, 0x3c),
         success: Color32::from_rgb(0x15, 0x80, 0x3d),
 
-        page_shadow: Color32::from_black_alpha(0x26),
+        page_shadow: Color32::from_black_alpha(0x2e),
         page_border: Color32::from_rgba_unmultiplied_const(0x2a, 0x1b, 0x40, 0x2b),
-        selection: Color32::from_rgba_unmultiplied_const(0x93, 0x33, 0xea, 0x40),
+        selection: Color32::from_rgba_unmultiplied_const(0x7c, 0x5c, 0xe0, 0x40),
         search_current: Color32::from_rgba_unmultiplied_const(0xf9, 0x73, 0x16, 0x99),
         search_other: Color32::from_rgba_unmultiplied_const(0xfb, 0xbf, 0x24, 0x80),
-        field_highlight: Color32::from_rgba_unmultiplied_const(0x93, 0x33, 0xea, 0x24),
+        field_highlight: Color32::from_rgba_unmultiplied_const(0x7c, 0x5c, 0xe0, 0x24),
         field_required: Color32::from_rgba_unmultiplied_const(0xbe, 0x12, 0x3c, 0x2e),
     };
 
@@ -169,6 +185,10 @@ impl Palette {
         }
     }
 
+    pub fn is_dark(&self) -> bool {
+        luminance(self.ground) < 0.2
+    }
+
     /// The colour a translucent card actually composites to over the canvas.
     ///
     /// Contrast has to be measured against this, not against the card's own
@@ -177,17 +197,33 @@ impl Palette {
     pub fn card_over_canvas(&self) -> Color32 {
         composite(self.card, self.canvas)
     }
+
+    /// The accent at a given opacity, for rings and glows.
+    pub fn accent_alpha(&self, alpha: u8) -> Color32 {
+        Color32::from_rgba_unmultiplied(self.accent.r(), self.accent.g(), self.accent.b(), alpha)
+    }
+
+    /// A translucent wash of the text colour: white in the dark theme, ink in
+    /// the light one. Hover fills and secondary buttons are built from it so
+    /// they lighten a dark surface and darken a light one.
+    pub fn wash(&self, alpha: u8) -> Color32 {
+        if self.is_dark() {
+            Color32::from_white_alpha(alpha)
+        } else {
+            Color32::from_rgba_unmultiplied(0x2a, 0x1b, 0x50, alpha / 2)
+        }
+    }
 }
 
 /// Composites a translucent foreground over an opaque background.
 ///
 /// `Color32` stores premultiplied components, so the foreground term is added
 /// as-is rather than being scaled by alpha a second time. Every translucent
-/// token below is therefore built with
+/// token above is therefore built with
 /// [`Color32::from_rgba_unmultiplied_const`], which does that multiplication —
 /// writing the plain RGB into `from_rgba_premultiplied` instead produces a
 /// colour brighter than its own alpha allows, and it renders as an additive
-/// glow rather than as tinted glass.
+/// glow rather than as a tint.
 pub fn composite(fg: Color32, bg: Color32) -> Color32 {
     let a = fg.a() as f32 / 255.0;
     let mix = |f: u8, b: u8| ((f as f32) + (b as f32) * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
@@ -217,132 +253,325 @@ pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 
 // --- metrics ---
 
-/// Height of a glass bar's visible slab — the rounded panel itself, stroke
-/// included, but not the inset that floats it off the window edge. Pass these
-/// through [`bar_panel_size`] when sizing the panel that holds one.
-pub const TOOLBAR_HEIGHT: f32 = 44.0;
-/// Matches [`TOOLBAR_HEIGHT`] because the tab strip holds the same 30px close
-/// buttons the toolbar does. At the old 34 they did not fit inside the frame's
-/// padding and were drawn with their bottom edge clipped off.
-pub const TAB_HEIGHT: f32 = 44.0;
-pub const STATUS_HEIGHT: f32 = 26.0;
+/// The row across the top of the window: brand, tabs, command search.
+pub const TITLE_BAR_HEIGHT: f32 = 52.0;
+/// Space left for the macOS traffic lights, which sit over the title bar once
+/// the content is drawn under a transparent titlebar.
+pub const TRAFFIC_LIGHT_INSET: f32 = 78.0;
+/// The header row at the top of the canvas well: file identity and actions.
+pub const TOOLBAR_HEIGHT: f32 = 52.0;
 pub const ROW_HEIGHT: f32 = 30.0;
 pub const GUTTER: f32 = 12.0;
-pub const RADIUS_CARD: u8 = 14;
-pub const RADIUS_CONTROL: u8 = 8;
-pub const RADIUS_SMALL: u8 = 6;
+
+/// Gap between islands, and between an island and the window edge.
+pub const GAP: f32 = 10.0;
+
+// The radius scale. Every corner in Quark is one of these.
+/// Pages and keyboard keys — rounded, but only just, so paper still reads as
+/// paper.
+pub const RADIUS_PAGE: u8 = 6;
+pub const RADIUS_SMALL: u8 = 8;
+pub const RADIUS_THUMB: u8 = 10;
+/// Buttons, tabs, menu rows.
+pub const RADIUS_CONTROL: u8 = 12;
+/// Cards, list rows, text fields, menus.
+pub const RADIUS_CARD: u8 = 16;
+/// The islands.
+pub const RADIUS_ISLAND: u8 = 20;
+/// Dialogs and the command palette.
+pub const RADIUS_DIALOG: u8 = 24;
 
 /// Gap between pages in the document canvas.
-pub const PAGE_GAP: f32 = 14.0;
+pub const PAGE_GAP: f32 = 16.0;
 /// Margin around the whole document.
-pub const PAGE_MARGIN: f32 = 18.0;
-/// Corner radius of the small controls inside a bar — buttons and the pill
-/// groups the toolbar arranges them into.
-pub const RADIUS_GLASS: u8 = 7;
+pub const PAGE_MARGIN: f32 = 24.0;
 
-/// Panels are flush in the flat design; the hairline does the separating.
-///
-/// Kept as a named zero rather than deleted so the panel-sizing arithmetic
-/// below still reads as "slab plus inset" and reintroducing an inset is a
-/// one-line change.
-pub const GLASS_INSET: i8 = 0;
-
-/// Width of the far-left tool rail.
-pub const RAIL_WIDTH: f32 = 46.0;
-/// Width of the navigation sidebar that switches side panels.
-pub const NAV_WIDTH: f32 = 176.0;
-/// Default width of the list panel beside the nav.
-pub const LIST_WIDTH: f32 = 226.0;
-/// Default width of the right-hand dock that holds Comments and the Assistant.
-pub const DOCK_WIDTH: f32 = 266.0;
+/// Width of the tool dock.
+pub const RAIL_WIDTH: f32 = 56.0;
+/// Default width of the pages island, margins included.
+pub const LIST_WIDTH: f32 = 258.0;
+/// Default width of the right-hand dock that holds Comments and the Assistant,
+/// margins included.
+pub const DOCK_WIDTH: f32 = 330.0;
 /// The dock is resizable. Below this the comment text wraps to two or three
 /// words a line and stops being readable; above it the document loses more
 /// width than a side panel is worth.
-pub const DOCK_MIN_WIDTH: f32 = 220.0;
+pub const DOCK_MIN_WIDTH: f32 = 280.0;
 pub const DOCK_MAX_WIDTH: f32 = 520.0;
 
-/// The size a panel must reserve to hold a bar of `slab` height.
-///
-/// `Panel::exact_size` is an *outer* size: egui gives the contents
-/// `exact_size` minus the frame's inner margin, stroke **and outer margin**,
-/// then clips to the panel. A panel asked for the bare slab height pays the
-/// frame out of its own widget row — which is how the toolbar once ended up
-/// with 22px to draw 30px buttons in.
-pub const fn bar_panel_size(slab: f32) -> f32 {
-    slab + GLASS_INSET as f32
+// --- type ---
+
+/// Manrope, the one UI typeface, shipped as its variable font.
+const MANROPE: &[u8] = include_bytes!("../assets/fonts/Manrope-Variable.ttf");
+
+/// Family name of the semibold cut, for labels, tabs and titles.
+pub const STRONG: &str = "manrope-strong";
+/// Family name of the bold cut, for headings.
+pub const HEAVY: &str = "manrope-heavy";
+
+/// Body text: Manrope Medium.
+pub fn body(size: f32) -> FontId {
+    FontId::proportional(size)
 }
 
-/// A chrome bar: opaque fill, a hairline along its lower edge, no shadow.
-///
-/// Flat by design. The reference separates panels with a single hairline and
-/// nothing else — no inset, no rounding, no drop shadow — so a bar is a fill
-/// and one border.
-pub fn bar(p: &Palette) -> egui::Frame {
-    egui::Frame::new()
-        .fill(p.card)
-        .inner_margin(egui::Margin::symmetric(12, 6))
+/// Labels, tabs, buttons: Manrope SemiBold.
+pub fn strong(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(STRONG.into()))
 }
 
-/// Shadow under a floating surface.
+/// Headings: Manrope Bold.
+pub fn heavy(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(HEAVY.into()))
+}
+
+/// Installs Manrope as the proportional font, plus its heavier cuts.
 ///
-/// Only popovers and the rendered page float now; panels are flush, so this is
-/// far softer than the glass design needed.
-pub fn card_shadow(p: &Palette) -> egui::epaint::Shadow {
+/// One variable font, instanced three times at different weights: egui picks
+/// a font per family rather than per weight, so each weight is its own family.
+/// egui's own fonts stay behind each as fallbacks for the glyphs Manrope lacks
+/// (symbols, CJK, emoji).
+pub fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let at = |weight: f32| {
+        egui::FontData::from_static(MANROPE).tweak(egui::FontTweak {
+            coords: egui::epaint::text::VariationCoords::new([(b"wght", weight)]),
+            ..Default::default()
+        })
+    };
+    fonts.font_data.insert("manrope-500".into(), Arc::new(at(500.0)));
+    fonts.font_data.insert("manrope-620".into(), Arc::new(at(620.0)));
+    fonts.font_data.insert("manrope-720".into(), Arc::new(at(720.0)));
+
+    let fallbacks = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let family = |first: &str| {
+        std::iter::once(first.to_string())
+            .chain(fallbacks.iter().cloned())
+            .collect::<Vec<_>>()
+    };
+    fonts.families.insert(FontFamily::Proportional, family("manrope-500"));
+    fonts.families.insert(FontFamily::Name(STRONG.into()), family("manrope-620"));
+    fonts.families.insert(FontFamily::Name(HEAVY.into()), family("manrope-720"));
+    ctx.set_fonts(fonts);
+}
+
+// --- surfaces ---
+
+/// Shadow under an island: wide and soft, so the edge dissolves rather than
+/// casting.
+pub fn island_shadow(p: &Palette) -> egui::epaint::Shadow {
     egui::epaint::Shadow {
-        offset: [0, 4],
-        blur: 16,
+        offset: [0, 10],
+        blur: 30,
         spread: 0,
-        color: if p.ground == Palette::DARK.ground {
-            Color32::from_black_alpha(0x59)
+        color: if p.is_dark() {
+            Color32::from_black_alpha(0x5a)
         } else {
-            Color32::from_black_alpha(0x14)
+            Color32::from_rgba_unmultiplied(0x2a, 0x1b, 0x50, 0x14)
         },
     }
 }
 
-/// A bordered surface inside a panel — a comment, a card in a list.
-pub fn card(p: &Palette) -> egui::Frame {
+/// Shadow under a floating surface — menus, dialogs, toasts, the capsule.
+pub fn float_shadow(p: &Palette) -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: [0, 18],
+        blur: 48,
+        spread: 0,
+        color: if p.is_dark() {
+            Color32::from_black_alpha(0x99)
+        } else {
+            Color32::from_rgba_unmultiplied(0x2a, 0x1b, 0x50, 0x26)
+        },
+    }
+}
+
+/// Kept for callers that predate the island split.
+pub fn card_shadow(p: &Palette) -> egui::epaint::Shadow {
+    island_shadow(p)
+}
+
+/// An island: the rounded, shadowed slab every panel is drawn as.
+///
+/// The caller adds the outer margin, which is what spaces islands apart.
+pub fn island(p: &Palette) -> egui::Frame {
     egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(CornerRadius::same(RADIUS_CARD))
+        .corner_radius(CornerRadius::same(RADIUS_ISLAND))
+        .shadow(island_shadow(p))
         .inner_margin(egui::Margin::same(10))
 }
 
-/// A menu or dialog surface. Opaque, because text over a translucent menu that
-/// happens to sit on a white page is unreadable.
+/// A bordered surface inside an island — a comment, a card in a list.
+pub fn card(p: &Palette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(p.wash(0x0a))
+        .stroke(Stroke::new(1.0, p.wash(0x0a)))
+        .corner_radius(CornerRadius::same(RADIUS_CARD))
+        .inner_margin(egui::Margin::same(12))
+}
+
+/// A recessed field: segment tracks, text inputs, the composer.
+pub fn recess(p: &Palette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(p.recess)
+        .stroke(Stroke::new(1.0, p.wash(0x0a)))
+        .corner_radius(CornerRadius::same(15))
+        .inner_margin(egui::Margin::same(4))
+}
+
+/// A menu or popover surface. Opaque, because text over a translucent menu
+/// that happens to sit on a white page is unreadable.
 pub fn popover(p: &Palette) -> egui::Frame {
     egui::Frame::new()
         .fill(p.popover)
         .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(CornerRadius::same(RADIUS_CONTROL))
-        .inner_margin(egui::Margin::same(8))
-        .shadow(card_shadow(p))
+        .corner_radius(CornerRadius::same(RADIUS_CARD + 2))
+        .inner_margin(egui::Margin::same(6))
+        .shadow(float_shadow(p))
 }
 
-/// Paints the hairline that separates a panel from what is next to it.
+/// A dialog, or the command palette.
+pub fn dialog(p: &Palette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(p.popover)
+        .stroke(Stroke::new(1.0, p.border))
+        .corner_radius(CornerRadius::same(RADIUS_DIALOG))
+        .inner_margin(egui::Margin::same(22))
+        .shadow(float_shadow(p))
+}
+
+/// The scrim behind a modal.
+pub fn scrim(p: &Palette) -> Color32 {
+    if p.is_dark() {
+        Color32::from_black_alpha(0x8c)
+    } else {
+        Color32::from_rgba_unmultiplied(0x18, 0x10, 0x30, 0x40)
+    }
+}
+
+/// Paints an island: its shadow, its fill and edge, and the sheen on top.
 ///
-/// Replaces the glass design's inset top highlight: a flat panel gets its
-/// definition from an edge, not from a lit bevel.
-pub fn hairline(painter: &egui::Painter, rect: egui::Rect, p: &Palette, side: Edge) {
-    let (a, b) = match side {
-        Edge::Bottom => (rect.left_bottom(), rect.right_bottom()),
-        Edge::Top => (rect.left_top(), rect.right_top()),
-        Edge::Right => (rect.right_top(), rect.right_bottom()),
-        Edge::Left => (rect.left_top(), rect.left_bottom()),
-    };
-    // Half-pixel so a 1px line lands on the pixel rather than across two.
-    let off = egui::vec2(0.5, 0.5);
-    painter.line_segment([a - off, b - off], Stroke::new(1.0, p.border));
+/// For surfaces whose container would clip a frame's own shadow — panels clip
+/// to their rect, so a shadow drawn by the panel's frame is cut off a few
+/// pixels outside the island. Pass an unclipped painter.
+pub fn paint_island(painter: &egui::Painter, rect: egui::Rect, p: &Palette) {
+    let radius = CornerRadius::same(RADIUS_ISLAND);
+    painter.add(island_shadow(p).as_shape(rect, radius));
+    painter.rect(rect, radius, p.card, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
+    paint_sheen(painter, rect, RADIUS_ISLAND as f32, p);
 }
 
-/// Which edge of a panel a [`hairline`] runs along.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Edge {
-    Top,
-    Bottom,
-    Left,
-    Right,
+/// Paints the sheen along the top edge of a rounded surface.
+///
+/// Inset by the corner radius at each end, so it reads as light on the flat
+/// of the top rather than as a line that runs off round the corners.
+pub fn paint_sheen(painter: &egui::Painter, rect: egui::Rect, radius: f32, p: &Palette) {
+    if p.highlight.a() == 0 {
+        return;
+    }
+    let y = rect.top() + 1.0;
+    painter.line_segment(
+        [
+            egui::pos2(rect.left() + radius, y),
+            egui::pos2(rect.right() - radius, y),
+        ],
+        Stroke::new(1.0, p.highlight),
+    );
+}
+
+/// Rounds the corners of a rectangular area that content was clipped to, by
+/// painting `behind` into each corner outside the rounding.
+///
+/// egui clips to rectangles, so a page scrolled into the corner of the canvas
+/// well would otherwise poke a square corner out of the rounded one. Each
+/// mask is a fan from the corner point to the arc, which covers exactly the
+/// region between the two edges and the curve.
+pub fn mask_corners(painter: &egui::Painter, rect: egui::Rect, radius: f32, behind: Color32) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    if r <= 0.0 {
+        return;
+    }
+    let corners = [
+        (rect.left_top(), egui::pos2(rect.left() + r, rect.top() + r), PI),
+        (rect.right_top(), egui::pos2(rect.right() - r, rect.top() + r), PI + FRAC_PI_2),
+        (rect.right_bottom(), egui::pos2(rect.right() - r, rect.bottom() - r), 0.0),
+        (rect.left_bottom(), egui::pos2(rect.left() + r, rect.bottom() - r), FRAC_PI_2),
+    ];
+    const STEPS: u32 = 10;
+    let mut mesh = egui::Mesh::default();
+    for (corner, centre, start) in corners {
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(corner, behind);
+        for i in 0..=STEPS {
+            let a = start + FRAC_PI_2 * (i as f32 / STEPS as f32);
+            mesh.colored_vertex(centre + egui::vec2(a.cos(), a.sin()) * r, behind);
+        }
+        for i in 0..STEPS {
+            mesh.add_triangle(base, base + 1 + i, base + 2 + i);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Paints the window ground: the fill, and the soft light that falls on it
+/// from above the title bar.
+pub fn paint_ground(painter: &egui::Painter, rect: egui::Rect, p: &Palette) {
+    painter.rect_filled(rect, CornerRadius::ZERO, p.ground);
+    // A fan from a point above the window to an ellipse round it: opaque-ish
+    // at the centre, clear at the rim. Vertex colours do the falloff, so the
+    // whole sheen is one mesh and costs nothing to repaint.
+    let glow = if p.is_dark() {
+        Color32::from_rgba_unmultiplied(0x90, 0x7b, 0xc6, 0x1c)
+    } else {
+        Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0x80)
+    };
+    let centre = egui::pos2(rect.center().x, rect.top() - rect.height() * 0.08);
+    let (rx, ry) = (rect.width() * 0.62, rect.height() * 0.62);
+    const STEPS: u32 = 48;
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(centre, glow);
+    for i in 0..=STEPS {
+        let a = std::f32::consts::TAU * (i as f32 / STEPS as f32);
+        mesh.colored_vertex(
+            centre + egui::vec2(a.cos() * rx, a.sin() * ry),
+            Color32::TRANSPARENT,
+        );
+    }
+    for i in 0..STEPS {
+        mesh.add_triangle(0, 1 + i, 2 + i);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// The velvet nap: a small tile of soft grain, laid over the ground.
+///
+/// Deterministic, so the texture is identical every launch, and tiled with a
+/// repeat sampler so it costs one quad however large the window is.
+pub fn grain_image(p: &Palette) -> egui::ColorImage {
+    const N: usize = 128;
+    let strength = if p.is_dark() { 9.0 } else { 6.0 };
+    let mut px = Vec::with_capacity(N * N);
+    let mut state = 0x9e37_79b9_u32;
+    for _ in 0..N * N {
+        // xorshift: cheap, stable, and plenty random for grain.
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let v = (state >> 24) as f32 / 255.0;
+        let a = (v * strength).round() as u8;
+        px.push(if p.is_dark() {
+            Color32::from_white_alpha(a)
+        } else {
+            Color32::from_black_alpha(a)
+        });
+    }
+    egui::ColorImage::new([N, N], px)
 }
 
 /// Applies the palette to an egui context.
@@ -356,48 +585,61 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode) {
 
     v.panel_fill = p.ground;
     v.window_fill = p.popover;
-    v.extreme_bg_color = composite(p.card, p.ground);
+    v.extreme_bg_color = composite(p.recess, p.card);
+    v.text_edit_bg_color = Some(composite(p.recess, p.card));
     v.faint_bg_color = p.card_hover;
+    v.code_bg_color = p.card_hover;
     v.override_text_color = Some(p.text);
+    v.weak_text_color = Some(p.text_faint);
     v.hyperlink_color = p.accent_text;
     v.selection.bg_fill = p.accent_soft;
     v.selection.stroke = Stroke::new(1.0, p.accent_text);
     v.window_stroke = Stroke::new(1.0, p.border);
-    v.window_corner_radius = CornerRadius::same(RADIUS_CARD);
-    v.popup_shadow = egui::epaint::Shadow {
-        offset: [0, 10],
-        blur: 30,
-        spread: 0,
-        color: Color32::from_black_alpha(0x77),
-    };
+    v.window_corner_radius = CornerRadius::same(RADIUS_DIALOG);
+    v.window_shadow = float_shadow(&p);
+    v.menu_corner_radius = CornerRadius::same(RADIUS_CARD + 2);
+    v.popup_shadow = float_shadow(&p);
+    v.indent_has_left_vline = false;
+    v.collapsing_header_frame = false;
+    v.handle_shape = egui::style::HandleShape::Circle;
+    v.text_cursor.stroke = Stroke::new(2.0, p.accent);
 
+    let control = CornerRadius::same(RADIUS_CONTROL);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.card;
+    w.noninteractive.weak_bg_fill = p.card;
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text_muted);
     w.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
-    w.noninteractive.corner_radius = CornerRadius::same(RADIUS_CONTROL);
+    w.noninteractive.corner_radius = control;
 
-    w.inactive.bg_fill = Color32::TRANSPARENT;
-    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    // A button at rest is a soft wash rather than an outline; menus clear the
+    // wash themselves, so menu rows still read as rows.
+    w.inactive.bg_fill = p.recess;
+    w.inactive.weak_bg_fill = p.wash(0x10);
     w.inactive.fg_stroke = Stroke::new(1.0, p.text);
     w.inactive.bg_stroke = Stroke::NONE;
-    w.inactive.corner_radius = CornerRadius::same(RADIUS_CONTROL);
+    w.inactive.corner_radius = control;
+    w.inactive.expansion = 0.0;
 
     w.hovered.bg_fill = p.card_hover;
-    w.hovered.weak_bg_fill = p.card_hover;
+    w.hovered.weak_bg_fill = p.wash(0x18);
     w.hovered.fg_stroke = Stroke::new(1.0, p.text);
-    w.hovered.bg_stroke = Stroke::new(1.0, p.border);
-    w.hovered.corner_radius = CornerRadius::same(RADIUS_CONTROL);
+    w.hovered.bg_stroke = Stroke::NONE;
+    w.hovered.corner_radius = control;
+    w.hovered.expansion = 0.0;
 
     w.active.bg_fill = p.accent_soft;
     w.active.weak_bg_fill = p.accent_soft;
-    w.active.fg_stroke = Stroke::new(1.0, p.text);
-    w.active.bg_stroke = Stroke::new(1.0, p.accent);
-    w.active.corner_radius = CornerRadius::same(RADIUS_CONTROL);
+    w.active.fg_stroke = Stroke::new(1.0, p.accent_text);
+    w.active.bg_stroke = Stroke::NONE;
+    w.active.corner_radius = control;
+    w.active.expansion = 0.0;
 
     w.open.bg_fill = p.card_hover;
-    w.open.weak_bg_fill = p.card_hover;
+    w.open.weak_bg_fill = p.wash(0x14);
     w.open.fg_stroke = Stroke::new(1.0, p.text);
+    w.open.bg_stroke = Stroke::NONE;
+    w.open.corner_radius = control;
 
     ctx.set_visuals(v);
 
@@ -406,10 +648,19 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode) {
     // spacing silently reverts the first time the user toggles light/dark.
     ctx.all_styles_mut(|style| {
         style.spacing.item_spacing = egui::vec2(6.0, 6.0);
-        style.spacing.button_padding = egui::vec2(8.0, 5.0);
+        style.spacing.button_padding = egui::vec2(12.0, 6.0);
+        style.spacing.interact_size.y = 30.0;
         style.spacing.menu_margin = egui::Margin::same(6);
-        style.spacing.scroll.bar_width = 11.0;
-        style.spacing.scroll.floating = false;
+        style.spacing.window_margin = egui::Margin::same(22);
+        style.spacing.menu_spacing = 4.0;
+        style.spacing.combo_height = 320.0;
+        style.spacing.scroll = egui::style::ScrollStyle::floating();
+        style.spacing.scroll.bar_width = 8.0;
+        style.spacing.scroll.floating_allocated_width = 0.0;
+        style.text_styles.insert(egui::TextStyle::Body, body(13.0));
+        style.text_styles.insert(egui::TextStyle::Button, strong(13.0));
+        style.text_styles.insert(egui::TextStyle::Heading, heavy(18.0));
+        style.text_styles.insert(egui::TextStyle::Small, body(11.0));
     });
 }
 
@@ -448,8 +699,6 @@ mod tests {
 
     #[test]
     fn primary_text_meets_wcag_aa_on_a_panel() {
-        // Measured against what the panel actually composites to, not against
-        // the nominal card colour.
         for mode in [ThemeMode::Dark, ThemeMode::Light] {
             let p = Palette::for_mode(mode);
             let bg = p.card_over_canvas();
@@ -469,11 +718,32 @@ mod tests {
     }
 
     #[test]
+    fn faint_text_is_still_readable_on_a_panel() {
+        // Faint carries real information — timestamps, page numbers, folders —
+        // so it has to clear body-text contrast on the island it sits on.
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let p = Palette::for_mode(mode);
+            let r = contrast_ratio(p.text_faint, p.card);
+            assert!(r >= 4.5, "{mode:?} faint text is only {r:.2}:1");
+        }
+    }
+
+    #[test]
     fn accent_text_is_readable_on_a_panel() {
         for mode in [ThemeMode::Dark, ThemeMode::Light] {
             let p = Palette::for_mode(mode);
             let r = contrast_ratio(p.accent_text, p.card_over_canvas());
             assert!(r >= 3.0, "{mode:?} accent text is only {r:.2}:1");
+        }
+    }
+
+    #[test]
+    fn text_on_a_solid_accent_fill_is_readable() {
+        // Primary buttons and the send button put `on_accent` on `accent`.
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let p = Palette::for_mode(mode);
+            let r = contrast_ratio(p.on_accent, p.accent);
+            assert!(r >= 4.5, "{mode:?} primary button text is only {r:.2}:1");
         }
     }
 
@@ -505,10 +775,15 @@ mod tests {
     }
 
     #[test]
-    fn the_canvas_is_never_brighter_than_a_page() {
-        // A canvas lighter than the paper inverts the visual hierarchy.
+    fn the_canvas_is_recessed_below_the_islands() {
+        // The well reads as sunk only if it is darker than the panels around
+        // it, in both themes.
         for mode in [ThemeMode::Dark, ThemeMode::Light] {
             let p = Palette::for_mode(mode);
+            assert!(
+                luminance(p.canvas) < luminance(p.card),
+                "{mode:?} canvas is not below the panels"
+            );
             assert!(
                 luminance(p.canvas) < luminance(Color32::WHITE),
                 "{mode:?} canvas outshines the page"
@@ -547,6 +822,7 @@ mod tests {
                 ("card_hover", p.card_hover),
                 ("border", p.border),
                 ("highlight", p.highlight),
+                ("recess", p.recess),
                 ("accent_soft", p.accent_soft),
                 ("page_shadow", p.page_shadow),
                 ("page_border", p.page_border),
@@ -555,6 +831,8 @@ mod tests {
                 ("search_other", p.search_other),
                 ("field_highlight", p.field_highlight),
                 ("field_required", p.field_required),
+                ("wash", p.wash(0x10)),
+                ("accent ring", p.accent_alpha(0x80)),
             ] {
                 let a = c.a();
                 assert!(
@@ -581,6 +859,31 @@ mod tests {
     }
 
     #[test]
+    fn the_radius_scale_only_grows() {
+        // A control rounder than the card it sits in looks like a mistake.
+        let scale = [
+            RADIUS_PAGE,
+            RADIUS_SMALL,
+            RADIUS_THUMB,
+            RADIUS_CONTROL,
+            RADIUS_CARD,
+            RADIUS_ISLAND,
+            RADIUS_DIALOG,
+        ];
+        assert!(scale.windows(2).all(|w| w[0] < w[1]), "{scale:?}");
+        assert!(scale.iter().all(|&r| r > 0), "no square corners anywhere");
+    }
+
+    #[test]
+    fn the_grain_tile_is_square_and_faint() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let img = grain_image(&Palette::for_mode(mode));
+            assert_eq!(img.size[0], img.size[1]);
+            assert!(img.pixels.iter().all(|c| c.a() < 16), "{mode:?} grain is too strong");
+        }
+    }
+
+    #[test]
     fn the_dock_default_sits_inside_its_own_bounds() {
         // A default outside the range gets silently clamped on first launch,
         // which looks like the panel resizing itself for no reason.
@@ -595,4 +898,3 @@ mod tests {
         assert!(!ThemeMode::Light.is_dark());
     }
 }
-

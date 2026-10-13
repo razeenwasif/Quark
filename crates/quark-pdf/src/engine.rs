@@ -37,6 +37,17 @@ pub fn library_filename() -> &'static str {
     }
 }
 
+/// The source-tree folder the vendored PDFium for this platform lives in.
+pub fn vendor_dir() -> &'static str {
+    if cfg!(windows) {
+        "vendor/pdfium"
+    } else if cfg!(target_os = "macos") {
+        "vendor/pdfium-mac"
+    } else {
+        "vendor/pdfium-linux"
+    }
+}
+
 /// Candidate locations for the PDFium library, in priority order.
 pub fn search_paths() -> Vec<PathBuf> {
     let name = library_filename();
@@ -61,11 +72,7 @@ pub fn search_paths() -> Vec<PathBuf> {
 
     // 3. A vendored copy in the source tree, so a `cargo test` or a freshly
     //    built `target/release/quark.exe` works with no setup.
-    let vendor = if cfg!(windows) {
-        "vendor/pdfium"
-    } else {
-        "vendor/pdfium-linux"
-    };
+    let vendor = vendor_dir();
     out.push(PathBuf::from(vendor).join(name));
 
     // Walk up from a starting directory looking for `vendor/`.
@@ -222,11 +229,7 @@ mod tests {
         let mut ancestor = exe.parent();
         let mut found = false;
         while let Some(dir) = ancestor {
-            let candidate = dir.join(if cfg!(windows) {
-                "vendor/pdfium"
-            } else {
-                "vendor/pdfium-linux"
-            });
+            let candidate = dir.join(vendor_dir());
             if paths.iter().any(|p| p.starts_with(&candidate)) {
                 found = true;
                 break;

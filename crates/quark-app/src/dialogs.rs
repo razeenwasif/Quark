@@ -11,7 +11,8 @@ use quark_core::geom::PageSize;
 use quark_pdf::doc::{DocInfo, Metadata};
 use quark_pdf::export::{Anchor, BatesOptions, ImageExport, ImageFormat, TextStamp};
 use quark_pdf::security::{PermissionSet, SanitizeOptions};
-use quark_ui::theme::Palette;
+use quark_ui::theme::{self, Palette};
+use quark_ui::widgets;
 
 /// What the user decided.
 #[derive(Debug, Clone, PartialEq)]
@@ -119,9 +120,12 @@ impl Dialog {
         let mut result = DialogResult::Pending;
         let mut open = true;
 
-        egui::Modal::new(egui::Id::new("quark-dialog")).show(ctx, |ui| {
-            ui.set_min_width(380.0);
-            ui.heading(RichText::new(self.title()).size(16.0).color(p.text));
+        egui::Modal::new(egui::Id::new("quark-dialog"))
+            .frame(theme::dialog(p))
+            .backdrop_color(theme::scrim(p))
+            .show(ctx, |ui| {
+            ui.set_min_width(400.0);
+            ui.label(RichText::new(self.title()).font(theme::heavy(17.0)).color(p.text));
             ui.add_space(8.0);
 
             match self {
@@ -499,17 +503,24 @@ impl Dialog {
                     danger,
                     ..
                 } => {
-                    ui.label(RichText::new(body.as_str()).color(p.text).size(12.5));
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        let button = egui::Button::new(
-                            RichText::new(confirm_label.as_str())
-                                .color(if *danger { p.error } else { p.text }),
-                        );
-                        if ui.add(button).clicked() {
+                    ui.label(
+                        RichText::new(body.as_str())
+                            .font(theme::body(13.0))
+                            .color(p.text_muted),
+                    );
+                    ui.add_space(14.0);
+                    // Right to left, so the confirming action sits at the
+                    // far edge where the eye ends up.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let confirmed = if *danger {
+                            widgets::danger_button(ui, p, confirm_label.as_str())
+                        } else {
+                            widgets::primary_button(ui, p, confirm_label.as_str(), true)
+                        };
+                        if confirmed.clicked() {
                             result = DialogResult::Confirmed;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if widgets::text_button(ui, p, "Cancel", false).clicked() {
                             result = DialogResult::Cancelled;
                         }
                     });

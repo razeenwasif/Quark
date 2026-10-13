@@ -291,7 +291,7 @@ pub fn command_table() -> Vec<CommandInfo> {
         C::TogglePanel(SidePanel::Signatures), "Signatures", View, "", false;
         C::TogglePanel(SidePanel::Fields), "Form Fields", View, "", false;
         C::ToggleToolbar, "Show Toolbar", View, "F8", false;
-        C::ToggleStatusBar, "Show Status Bar", View, "", false;
+        C::ToggleStatusBar, "Show Page Controls", View, "", false;
         C::FullScreen, "Full Screen", View, "F11", false;
         C::ReadingMode, "Reading Mode", View, "Ctrl+H", false;
         C::ToggleTheme, "Toggle Light/Dark Theme", View, "", false;

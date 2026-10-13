@@ -178,13 +178,23 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Quark")
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size([900.0, 560.0])
+        .with_drag_and_drop(true)
+        .with_icon(load_icon());
+    // On a Mac the content runs up under a transparent titlebar, so Quark's
+    // own title row — brand, tabs, search — sits beside the traffic lights
+    // instead of below an empty grey strip.
+    if cfg!(target_os = "macos") {
+        viewport = viewport
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Quark")
-            .with_inner_size([1360.0, 900.0])
-            .with_min_inner_size([720.0, 480.0])
-            .with_drag_and_drop(true)
-            .with_icon(load_icon()),
+        viewport,
         ..Default::default()
     };
 
@@ -339,31 +349,28 @@ mod tests {
     }
 
     #[test]
-    fn the_three_quarks_are_three_different_colours() {
-        // A triplet that renders in one colour is a smudge at taskbar size,
-        // which is the whole reason the dots are not brand purple.
+    fn the_three_quarks_differ_in_lightness() {
+        // The mark separates its quarks by lightness, not hue: lilac, the
+        // accent, and the accent dimmed. Hue alone is lost at taskbar size, so
+        // the steps between them have to be real.
         let icon = load_icon();
-        // Matches the -90/30/150 degree placement at 0.2 of the icon size.
-        let top = icon_pixel(&icon, 0.5, 0.5 - 0.2);
-        let lower_right = icon_pixel(&icon, 0.5 + 0.173, 0.5 + 0.1);
-        let lower_left = icon_pixel(&icon, 0.5 - 0.173, 0.5 + 0.1);
+        let top = icon_pixel(&icon, 0.5, 0.5 - 0.145);
+        let lower_left = icon_pixel(&icon, 0.5 - 0.125, 0.5 + 0.075);
+        let lower_right = icon_pixel(&icon, 0.5 + 0.125, 0.5 + 0.075);
 
-        for (name, px) in [
-            ("top", top),
-            ("lower right", lower_right),
-            ("lower left", lower_left),
-        ] {
+        let luma = |px: [u8; 4]| 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
+        for (name, px) in [("top", top), ("lower left", lower_left), ("lower right", lower_right)] {
             assert_eq!(px[3], 255, "the {name} quark should be opaque");
+            // All three are violet: blue leads green.
+            assert!(px[2] > px[1], "the {name} quark is not violet: {px:?}");
         }
-        // Each quark leads on a different channel: pink, green, blue.
-        assert!(top[0] > top[1] && top[0] > top[2], "top: {top:?}");
         assert!(
-            lower_right[1] > lower_right[0] && lower_right[1] > lower_right[2],
-            "lower right: {lower_right:?}"
+            luma(lower_left) > luma(top) + 20.0,
+            "lilac {lower_left:?} should be lighter than the accent {top:?}"
         );
         assert!(
-            lower_left[2] > lower_left[0] && lower_left[2] > lower_left[1],
-            "lower left: {lower_left:?}"
+            luma(top) > luma(lower_right) + 20.0,
+            "the accent {top:?} should be lighter than the dimmed quark {lower_right:?}"
         );
     }
 

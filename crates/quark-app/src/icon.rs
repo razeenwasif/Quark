@@ -1,13 +1,15 @@
-// Quark's application icon: a baryon, three colour-charged quarks bound into
-// a triangle on a violet tile.
+// Quark's application icon: the mark from the title bar — three quarks bound
+// in a ring — on a velvet tile.
 //
 // # Why it is drawn rather than loaded
 //
-// The icon has to exist in two places that cannot share a file: the running
-// window sets it through winit, and Windows Explorer reads it from a resource
-// compiled into the executable. Drawing it means both come from this one
-// function — `build.rs` includes this file directly to generate the `.ico`, so
-// the pinned icon and the window icon cannot drift apart.
+// The icon has to exist in several places that cannot share a file: the
+// running window sets it through winit, Windows Explorer reads it from a
+// resource compiled into the executable, and the macOS bundle carries an
+// `.icns`. Drawing it means all of them come from this one function —
+// `build.rs` and xtask include this file directly, so the pinned icon, the
+// Dock icon and the window icon cannot drift apart, or away from the brand
+// mark the title bar draws.
 //
 // This module deliberately has no dependencies, not even `egui`. `build.rs`
 // pulls it in with `include!`, and a build script cannot see the crate's own
@@ -18,19 +20,6 @@ pub fn sd_round_square(px: f32, py: f32, half: f32, r: f32) -> f32 {
     let qx = px.abs() - half + r;
     let qy = py.abs() - half + r;
     qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r
-}
-
-/// Distance to a line segment, for the bonds between the quarks.
-pub fn sd_segment(px: f32, py: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
-    let (vx, vy) = (b.0 - a.0, b.1 - a.1);
-    let (wx, wy) = (px - a.0, py - a.1);
-    let len2 = vx * vx + vy * vy;
-    let t = if len2 > 0.0 {
-        ((wx * vx + wy * vy) / len2).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    (wx - vx * t).hypot(wy - vy * t)
 }
 
 /// Antialiased coverage from a signed distance, in pixels.
@@ -62,41 +51,38 @@ pub const fn rgb(hex: u32) -> [f32; 3] {
 }
 
 /// Renders the icon at `size` pixels square as straight (non-premultiplied)
-/// RGBA, the layout both winit and the ICO format expect.
+/// RGBA, the layout winit, the ICO format and PNG all expect.
 ///
 /// Every dimension is a fraction of `size`, so the mark is identical at the
-/// 16px the taskbar uses and the 256px Explorer wants for large icons.
+/// 16px a taskbar uses and the 1024px the Dock wants — with floors on the
+/// ring and the dots, so neither rounds away to nothing at the small end.
 ///
-/// The three dots keep the red/green/blue of colour charge rather than the
-/// brand purple — against the violet tile they are the only thing that reads
-/// at 16px, and a monochrome triplet collapses into a smudge at that size.
+/// The three quarks are told apart by lightness rather than hue — lilac, the
+/// amethyst accent, and the accent dimmed — which is how the title bar's mark
+/// is drawn, and what still separates them when hue is lost at 16px.
 pub fn render(size: usize) -> Vec<u8> {
     let s = size as f32;
     let c = (s - 1.0) / 2.0;
 
+    // The tile.
     let half = s * 0.455;
     let radius = s * 0.24;
-    // Distance of each quark from the centre, and how big each one is.
-    let orbit = s * 0.200;
-    let dot = s * 0.083;
-    let bond = s * 0.017;
+    // The mark, at the proportions the title bar draws it, scaled to leave
+    // the tile a margin round the ring.
+    let ring = s * 0.29;
+    let ring_width = (s * 0.05).max(1.2);
+    let dot = (s * 0.068).max(1.1);
 
-    // Equilateral, point up: the triangle reads as deliberate at any rotation
-    // but this is the one that looks upright in a taskbar.
-    let quark = |deg: f32| -> (f32, f32) {
-        let rad = deg.to_radians();
-        (c + orbit * rad.cos(), c + orbit * rad.sin())
-    };
+    let accent = rgb(0x9D7BFF);
     let quarks = [
-        (quark(-90.0), rgb(0xFF7BA8)),
-        (quark(30.0), rgb(0x5FE39B)),
-        (quark(150.0), rgb(0x6FA8FF)),
+        ((c, c - s * 0.145), accent, 1.0),
+        ((c - s * 0.125, c + s * 0.075), rgb(0xC6B2FF), 1.0),
+        ((c + s * 0.125, c + s * 0.075), accent, 0.55),
     ];
 
-    let tile_top = rgb(0x34205C);
-    let tile_bottom = rgb(0x150C26);
-    let bond_colour = rgb(0xC9B6FF);
-    let glow = rgb(0xA855F7);
+    // Velvet: a violet-black, lit softly from above.
+    let tile_top = rgb(0x1E1A28);
+    let tile_bottom = rgb(0x0E0D12);
 
     let mut buf = vec![0f32; size * size * 4];
     for y in 0..size {
@@ -104,8 +90,6 @@ pub fn render(size: usize) -> Vec<u8> {
             let (px, py) = (x as f32, y as f32);
             let i = (y * size + x) * 4;
 
-            // The tile, lit from the top so it sits in the same family as the
-            // glass chrome.
             let d = sd_round_square(px - c, py - c, half, radius);
             let t = (py / s).clamp(0.0, 1.0);
             let fill = [
@@ -122,28 +106,23 @@ pub fn render(size: usize) -> Vec<u8> {
                 continue;
             }
 
-            // A soft violet bloom under the triplet, so the dots look lit
-            // rather than pasted on.
-            let bloom = 1.0 - ((px - c).hypot(py - c) / (s * 0.42)).min(1.0);
-            over(&mut buf, i, glow, bloom * bloom * 0.30 * inside);
+            // The light a velvet nap catches, falling from above the mark.
+            let bloom = 1.0 - ((px - c).hypot(py - (c - s * 0.30)) / (s * 0.62)).min(1.0);
+            over(&mut buf, i, accent, bloom * bloom * 0.16 * inside);
 
-            // Bonds first, so the dots sit on top of them.
-            let mut bd = f32::MAX;
-            for k in 0..3 {
-                let a = quarks[k].0;
-                let b = quarks[(k + 1) % 3].0;
-                bd = bd.min(sd_segment(px, py, a, b));
-            }
-            over(&mut buf, i, bond_colour, coverage(bd - bond) * 0.45 * inside);
+            // The ring, translucent, so it reads as the bond rather than as a
+            // fourth thing competing with the quarks.
+            let rd = ((px - c).hypot(py - c) - ring).abs() - ring_width / 2.0;
+            over(&mut buf, i, accent, coverage(rd) * 0.45 * inside);
 
-            for ((qx, qy), colour) in quarks {
+            for ((qx, qy), colour, alpha) in quarks {
                 let dd = (px - qx).hypot(py - qy) - dot;
-                over(&mut buf, i, colour, coverage(dd) * inside);
+                over(&mut buf, i, colour, coverage(dd) * alpha * inside);
             }
         }
     }
 
-    // The accumulator is premultiplied; both winit and ICO want straight alpha.
+    // The accumulator is premultiplied; winit, ICO and PNG want straight alpha.
     let mut rgba = vec![0u8; size * size * 4];
     for i in (0..buf.len()).step_by(4) {
         let a = buf[i + 3];

@@ -12,7 +12,7 @@ use quark_core::tools::Tool;
 use quark_pdf::export::{BatesOptions, ImageExport, TextStamp};
 use quark_pdf::security::{RedactionMark, SanitizeOptions};
 use quark_pdf::service::{DocOp, Request};
-use quark_ui::icons::Icon;
+use quark_ui::icons::{self, Icon};
 use quark_ui::theme::{self, Palette};
 use quark_ui::widgets;
 
@@ -38,46 +38,195 @@ use crate::viewer::{self, ViewerAction};
 impl App {
     // ---------------------------------------------------------------- chrome
 
-    fn menu_bar(&mut self, ui: &mut egui::Ui, p: &Palette) {
+    /// The row across the top: the brand (which holds every menu), the open
+    /// documents, command search and the theme.
+    ///
+    /// On macOS the window content runs under a transparent titlebar, so this
+    /// row *is* the title bar: it leaves room for the traffic lights, and its
+    /// empty space moves the window.
+    fn title_bar(&mut self, ui: &mut egui::Ui, p: &Palette) {
         // Panels are drawn into the parent `Ui` in this version of egui; the
         // context is still needed for dispatch, and cloning it is just an Arc.
         let ctx = &ui.ctx().clone();
-        let table = command_table();
-        egui::Panel::top("menu")
-            .exact_size(28.0)
+        let lead = if cfg!(target_os = "macos") {
+            theme::TRAFFIC_LIGHT_INSET
+        } else {
+            theme::GAP
+        };
+        egui::Panel::top("titlebar")
+            .exact_size(theme::TITLE_BAR_HEIGHT)
             .show_separator_line(false)
-            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 2)))
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: lead as i8,
+                right: GAP_I,
+                top: 0,
+                bottom: 0,
+            }))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Quark")
-                            .size(13.0)
-                            .strong()
-                            .color(p.accent_text),
+                // Registered before anything is drawn on the bar, so every
+                // control below wins the pointer: only empty space drags.
+                let bar = ui.max_rect();
+                let drag = ui.interact(
+                    bar,
+                    egui::Id::new("titlebar-drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if drag.drag_started_by(egui::PointerButton::Primary) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    self.brand_menu(ui, p, ctx);
+                    widgets::separator(ui, p);
+
+                    // The tabs get whatever command search and the theme
+                    // toggle leave, and scroll sideways past that.
+                    let reserve = SEARCH_WIDTH + 36.0 + 24.0;
+                    let room = (ui.available_width() - reserve).max(140.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(room, 40.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            egui::ScrollArea::horizontal()
+                                .id_salt("tab-scroll")
+                                .scroll_bar_visibility(
+                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                )
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    ui.horizontal_centered(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 4.0;
+                                        self.tabs_row(ui, p, ctx);
+                                    });
+                                });
+                        },
                     );
-                    ui.add_space(8.0);
-                    for menu in Menu::ALL {
-                        ui.menu_button(menu.label(), |ui| {
-                            ui.set_min_width(230.0);
-                            for info in table.iter().filter(|c| c.menu == menu) {
-                                let enabled = self.command_enabled(&info.command, info.mutates);
-                                let label = if info.shortcut.is_empty() {
-                                    info.label.to_string()
-                                } else {
-                                    format!("{}\t{}", info.label, info.shortcut)
-                                };
-                                if ui
-                                    .add_enabled(enabled, egui::Button::new(label))
-                                    .clicked()
-                                {
-                                    self.dispatch(info.command.clone(), ctx);
-                                    ui.close();
-                                }
-                            }
-                        });
-                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (icon, tip) = if self.theme.is_dark() {
+                            (Icon::Sun, "Switch to the light theme")
+                        } else {
+                            (Icon::Moon, "Switch to the dark theme")
+                        };
+                        if widgets::icon_button(ui, p, icon, tip, 36.0, false, true).clicked() {
+                            self.dispatch(Command::ToggleTheme, ctx);
+                        }
+                        ui.add_space(4.0);
+                        if command_search(ui, p).clicked() {
+                            self.dispatch(Command::CommandPalette, ctx);
+                        }
+                    });
                 });
             });
+    }
+
+    /// The brand button, which opens every menu Quark has.
+    ///
+    /// Ten menus across the top were a second toolbar of words; behind the
+    /// brand they are one click away, and the command palette beside them
+    /// reaches the same commands by name.
+    fn brand_menu(&mut self, ui: &mut egui::Ui, p: &Palette, ctx: &Context) {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(104.0, 36.0), egui::Sense::click());
+        let open = egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(&response));
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter();
+            if open || response.hovered() {
+                painter.rect_filled(
+                    rect,
+                    egui::CornerRadius::same(theme::RADIUS_CONTROL),
+                    p.wash(if open { 0x14 } else { 0x0d }),
+                );
+            }
+            widgets::brand_mark(
+                painter,
+                egui::Rect::from_center_size(
+                    rect.left_center() + egui::vec2(19.0, 0.0),
+                    egui::Vec2::splat(22.0),
+                ),
+                p,
+            );
+            painter.text(
+                rect.left_center() + egui::vec2(38.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                "Quark",
+                theme::heavy(14.0),
+                p.text,
+            );
+            icons::draw(
+                painter,
+                egui::Rect::from_center_size(
+                    rect.right_center() - egui::vec2(15.0, 0.0),
+                    egui::Vec2::splat(12.0),
+                ),
+                Icon::ChevronDown,
+                p.text_faint,
+            );
+        }
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+        let table = command_table();
+        egui::Popup::menu(&response).show(|ui| {
+            ui.set_min_width(190.0);
+            for menu in Menu::ALL {
+                ui.menu_button(menu.label(), |ui| {
+                    ui.set_min_width(270.0);
+                    for info in table.iter().filter(|c| c.menu == menu) {
+                        let enabled = self.command_enabled(&info.command, info.mutates);
+                        let button = egui::Button::new(info.label)
+                            .shortcut_text(widgets::platform_keys(info.shortcut));
+                        if ui.add_enabled(enabled, button).clicked() {
+                            self.dispatch(info.command.clone(), ctx);
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /// Home, then one tab per open document, then the open button.
+    fn tabs_row(&mut self, ui: &mut egui::Ui, p: &Palette, ctx: &Context) {
+        let mut to_close = None;
+        let mut to_select = None;
+        // Home first and always, with no close button — there is nothing to
+        // close, and an X that does nothing invites the click anyway.
+        let go_home = title_tab(ui, p, Icon::Home, "Home", self.home.visible, false, false).clicked;
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let active = !self.home.visible && i == self.active;
+            let title = widgets::elide(&tab.title(), 26, true);
+            let hit = title_tab(ui, p, Icon::Document, &title, active, tab.has_unsaved_changes(), true);
+            if hit.close {
+                to_close = Some(i);
+            } else if hit.clicked {
+                to_select = Some(i);
+            }
+        }
+        if widgets::icon_button(
+            ui,
+            p,
+            Icon::Plus,
+            &widgets::platform_keys("Open a file (Ctrl+O)"),
+            32.0,
+            false,
+            true,
+        )
+        .clicked()
+        {
+            self.dispatch(Command::Open, ctx);
+        }
+
+        if go_home {
+            self.show_home();
+        }
+        if let Some(i) = to_select {
+            self.show_tab(i);
+            self.textures.clear();
+        }
+        if let Some(i) = to_close {
+            self.close_tab(i);
+        }
     }
 
     /// Whether a command can run right now.
@@ -124,11 +273,6 @@ impl App {
         }
     }
 
-    /// The far-left tool rail.
-    ///
-    /// Dark in both themes: it reads as the frame of the application rather
-    /// than as another surface, which is what keeps the four light columns
-    /// beside it from blurring into one.
     /// Drains the assistant worker into the conversation.
     ///
     /// Called every frame from `update`, like the PDF service drain: a streamed
@@ -248,25 +392,33 @@ impl App {
         // front, rather than buried in settings — and not at all for Ollama,
         // where it would be untrue.
         if backend.leaves_the_machine() && !self.ai.egress_acknowledged {
-            ui.add_space(10.0);
-            ui.label(
-                RichText::new(format!(
-                    "{} runs in the cloud. Asking a question sends the pages in \
-                     scope, and any selected text, to it.",
-                    backend.label()
-                ))
-                .size(11.5)
-                .color(p.text_muted),
-            );
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if widgets::text_button(ui, p, "I understand", false).clicked() {
-                    self.ai.egress_acknowledged = true;
-                }
-                if widgets::text_button(ui, p, "Use Ollama instead", false).clicked() {
-                    self.prefs.ai_backend = assistant::backend_key(quark_ai::Backend::Ollama).into();
-                    self.prefs.ai_model = quark_ai::Backend::Ollama.default_model().into();
-                }
+            theme::card(p).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new(format!("{} runs in the cloud", backend.label()))
+                        .font(theme::strong(13.0))
+                        .color(p.text),
+                );
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(
+                        "Asking a question sends the pages in scope, and any \
+                         selected text, to it.",
+                    )
+                    .font(theme::body(12.5))
+                    .color(p.text_muted),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if widgets::primary_button(ui, p, "I understand", true).clicked() {
+                        self.ai.egress_acknowledged = true;
+                    }
+                    if widgets::text_button(ui, p, "Use Ollama instead", false).clicked() {
+                        self.prefs.ai_backend =
+                            assistant::backend_key(quark_ai::Backend::Ollama).into();
+                        self.prefs.ai_model = quark_ai::Backend::Ollama.default_model().into();
+                    }
+                });
             });
             return;
         }
@@ -291,47 +443,6 @@ impl App {
             self.ai.service.list_models(lister);
         }
 
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("ai-backend")
-                .selected_text(RichText::new(backend.label()).size(11.5))
-                .width(108.0)
-                .show_ui(ui, |ui| {
-                    for b in quark_ai::Backend::ALL {
-                        if ui.selectable_label(b == backend, b.label()).clicked() && b != backend {
-                            self.prefs.ai_backend = assistant::backend_key(b).into();
-                            // The old model name means nothing to the new
-                            // backend, so it cannot be carried across.
-                            self.prefs.ai_model = b.default_model().into();
-                        }
-                    }
-                });
-
-            let model = self.prefs.ai_model.clone();
-            egui::ComboBox::from_id_salt("ai-model")
-                .selected_text(RichText::new(widgets::elide(&model, 18, true)).size(11.5))
-                .width(ui.available_width().max(60.0))
-                .show_ui(ui, |ui| {
-                    if self.ai.models.is_empty() {
-                        ui.label(
-                            RichText::new(match backend {
-                                quark_ai::Backend::Ollama => "No models found — is Ollama running?",
-                                _ => "Type a model name in Settings.",
-                            })
-                            .size(11.0)
-                            .color(p.text_faint),
-                        );
-                    }
-                    for name in &self.ai.models {
-                        if ui.selectable_label(*name == model, name).clicked() {
-                            self.prefs.ai_model = name.clone();
-                        }
-                    }
-                });
-        });
-        ui.add_space(4.0);
-
-        // --- credentials ---
-        //
         // Re-checked only when the backend changes: reading the credential
         // store is a syscall, and doing it every frame is sixty a second.
         if self.ai.key_state.map(|(b, _)| b) != Some(backend) {
@@ -339,344 +450,386 @@ impl App {
         }
         let source = self.ai.key_state.map(|(_, s)| s).unwrap_or(assistant::KeySource::Missing);
 
-        if backend.leaves_the_machine() {
-            let (label, colour) = match source {
-                assistant::KeySource::Environment => (
-                    format!("Key from {}", assistant::env_var(backend).unwrap_or("")),
-                    p.success,
-                ),
-                assistant::KeySource::Stored => ("Key stored".to_string(), p.success),
-                assistant::KeySource::Missing => ("No API key set".to_string(), p.warning),
-            };
+        theme::card(p).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(label).size(11.0).color(colour));
-                if widgets::text_button(
-                    ui,
-                    p,
-                    if self.ai.settings_open { "Hide" } else { "Set up" },
-                    self.ai.settings_open,
-                )
-                .clicked()
-                {
-                    self.ai.settings_open = !self.ai.settings_open;
-                    self.ai.key_input.clear();
-                }
-            });
-            ui.add_space(4.0);
-        }
+                egui::ComboBox::from_id_salt("ai-backend")
+                    .selected_text(RichText::new(backend.label()).font(theme::strong(12.0)))
+                    .width(112.0)
+                    .show_ui(ui, |ui| {
+                        for b in quark_ai::Backend::ALL {
+                            if ui.selectable_label(b == backend, b.label()).clicked() && b != backend {
+                                self.prefs.ai_backend = assistant::backend_key(b).into();
+                                // The old model name means nothing to the new
+                                // backend, so it cannot be carried across.
+                                self.prefs.ai_model = b.default_model().into();
+                            }
+                        }
+                    });
 
-        if self.ai.settings_open && backend.leaves_the_machine() {
-            // Base URL, for the one backend that needs to be pointed somewhere.
-            if backend == quark_ai::Backend::OpenAiCompat {
-                ui.label(RichText::new("Endpoint").size(10.5).color(p.text_faint));
-                ui.horizontal_wrapped(|ui| {
-                    for (name, url) in assistant::BASE_URL_PRESETS {
-                        let active = self.prefs.ai_base_url == url;
-                        if widgets::text_button(ui, p, name, active).clicked() {
-                            self.prefs.ai_base_url = url.into();
+                let model = self.prefs.ai_model.clone();
+                egui::ComboBox::from_id_salt("ai-model")
+                    .selected_text(
+                        RichText::new(widgets::elide(&model, 20, true))
+                            .font(theme::body(12.0))
+                            .color(p.text_muted),
+                    )
+                    .width(ui.available_width().max(60.0))
+                    .show_ui(ui, |ui| {
+                        if self.ai.models.is_empty() {
+                            ui.label(
+                                RichText::new(match backend {
+                                    quark_ai::Backend::Ollama => "No models found — is Ollama running?",
+                                    _ => "Type a model name in Settings.",
+                                })
+                                .font(theme::body(11.5))
+                                .color(p.text_faint),
+                            );
+                        }
+                        for name in &self.ai.models {
+                            if ui.selectable_label(*name == model, name).clicked() {
+                                self.prefs.ai_model = name.clone();
+                            }
+                        }
+                    });
+            });
+
+            // --- credentials ---
+            if backend.leaves_the_machine() {
+                let (label, colour) = match source {
+                    assistant::KeySource::Environment => (
+                        format!("Key from {}", assistant::env_var(backend).unwrap_or("")),
+                        p.success,
+                    ),
+                    assistant::KeySource::Stored => ("Key stored".to_string(), p.success),
+                    assistant::KeySource::Missing => ("No API key set".to_string(), p.warning),
+                };
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().circle_filled(dot.center(), 3.5, colour);
+                    ui.label(RichText::new(label).font(theme::strong(11.5)).color(colour));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let toggle = if self.ai.settings_open { "Hide" } else { "Set up" };
+                        if widgets::ghost_button(ui, p, toggle).clicked() {
+                            self.ai.settings_open = !self.ai.settings_open;
+                            self.ai.key_input.clear();
+                        }
+                    });
+                });
+            }
+
+            if self.ai.settings_open && backend.leaves_the_machine() {
+                ui.add_space(6.0);
+                // Base URL, for the one backend that needs to be pointed somewhere.
+                if backend == quark_ai::Backend::OpenAiCompat {
+                    widgets::panel_header(ui, p, "Endpoint");
+                    ui.horizontal_wrapped(|ui| {
+                        for (name, url) in assistant::BASE_URL_PRESETS {
+                            let active = self.prefs.ai_base_url == url;
+                            if widgets::text_button(ui, p, name, active).clicked() {
+                                self.prefs.ai_base_url = url.into();
+                            }
+                        }
+                    });
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.prefs.ai_base_url)
+                            .desired_width(f32::INFINITY)
+                            .font(theme::body(11.5)),
+                    );
+                    ui.add_space(6.0);
+
+                    // These endpoints cannot be enumerated — a proxy serves
+                    // models under whatever names its operator chose — so the
+                    // model is typed rather than picked.
+                    widgets::panel_header(ui, p, "Model");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.prefs.ai_model)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("gpt-4o-mini, gemini-2.5-flash, …")
+                            .font(theme::body(11.5)),
+                    );
+                    ui.add_space(6.0);
+                }
+
+                widgets::panel_header(ui, p, "API key");
+                // Masked, and a stored key is never read back into the field:
+                // the credential store is write-and-use.
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.ai.key_input)
+                        .password(true)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(match source {
+                            assistant::KeySource::Stored => "Replace the stored key",
+                            _ => "Paste your key",
+                        })
+                        .font(theme::body(11.5)),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let typed = !self.ai.key_input.trim().is_empty();
+                    if widgets::primary_button(ui, p, "Save", typed).clicked() && typed {
+                        if let Some(target) = backend.credential_key() {
+                            match quark_shell::store_secret(target, self.ai.key_input.trim()) {
+                                Ok(()) => {
+                                    self.ai.key_input.clear();
+                                    self.ai.key_state = None;
+                                    self.ai.settings_open = false;
+                                    self.toasts.push(crate::app::Toast {
+                                        text: format!("Key saved for {}", backend.label()),
+                                        error: false,
+                                        ttl: 3.5,
+                                    });
+                                }
+                                Err(e) => self.toasts.push(crate::app::Toast {
+                                    text: format!("Could not save the key: {e}"),
+                                    error: true,
+                                    ttl: 8.0,
+                                }),
+                            }
+                        }
+                    }
+                    if source == assistant::KeySource::Stored
+                        && widgets::text_button(ui, p, "Remove", false).clicked()
+                    {
+                        if let Some(target) = backend.credential_key() {
+                            let _ = quark_shell::delete_secret(target);
+                            self.ai.key_state = None;
                         }
                     }
                 });
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.prefs.ai_base_url)
-                        .desired_width(f32::INFINITY)
-                        .font(egui::FontId::proportional(11.0)),
-                );
-                ui.add_space(6.0);
-
-                // These endpoints cannot be enumerated — a proxy serves models
-                // under whatever names its operator chose — so the model is
-                // typed rather than picked.
-                ui.label(RichText::new("Model").size(10.5).color(p.text_faint));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.prefs.ai_model)
-                        .desired_width(f32::INFINITY)
-                        .hint_text("gpt-4o-mini, gemini-2.5-flash, …")
-                        .font(egui::FontId::proportional(11.0)),
-                );
-                ui.add_space(6.0);
+                if source == assistant::KeySource::Environment {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(
+                            "The environment variable takes priority, so a saved key \
+                             will not be used until it is unset.",
+                        )
+                        .font(theme::body(11.0))
+                        .color(p.text_faint),
+                    );
+                }
             }
 
-            ui.label(RichText::new("API key").size(10.5).color(p.text_faint));
-            // Masked, and a stored key is never read back into the field: the
-            // credential store is write-and-use.
-            ui.add(
-                egui::TextEdit::singleline(&mut self.ai.key_input)
-                    .password(true)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(match source {
-                        assistant::KeySource::Stored => "Replace the stored key",
-                        _ => "Paste your key",
-                    })
-                    .font(egui::FontId::proportional(11.0)),
-            );
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let typed = !self.ai.key_input.trim().is_empty();
-                if widgets::text_button(ui, p, "Save", false).clicked() && typed {
-                    if let Some(target) = backend.credential_key() {
-                        match quark_shell::store_secret(target, self.ai.key_input.trim()) {
-                            Ok(()) => {
-                                self.ai.key_input.clear();
-                                self.ai.key_state = None;
-                                self.ai.settings_open = false;
-                                self.toasts.push(crate::app::Toast {
-                                    text: format!("Key saved for {}", backend.label()),
-                                    error: false,
-                                    ttl: 3.5,
-                                });
-                            }
-                            Err(e) => self.toasts.push(crate::app::Toast {
-                                text: format!("Could not save the key: {e}"),
-                                error: true,
-                                ttl: 8.0,
-                            }),
-                        }
-                    }
-                }
-                if source == assistant::KeySource::Stored
-                    && widgets::text_button(ui, p, "Remove", false).clicked()
-                {
-                    if let Some(target) = backend.credential_key() {
-                        let _ = quark_shell::delete_secret(target);
-                        self.ai.key_state = None;
-                    }
-                }
-            });
-            if source == assistant::KeySource::Environment {
+            // The configured model has to exist, or the failure only shows up
+            // as a 404 at the moment a question is asked.
+            if !self.ai.models.is_empty() && !self.ai.models.contains(&self.prefs.ai_model) {
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(
-                        "The environment variable takes priority, so a saved key \
-                         will not be used until it is unset.",
-                    )
-                    .size(10.5)
-                    .color(p.text_faint),
+                    RichText::new(format!(
+                        "\u{201c}{}\u{201d} is not installed. Pick one above.",
+                        self.prefs.ai_model
+                    ))
+                    .font(theme::body(11.5))
+                    .color(p.warning),
                 );
             }
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(4.0);
-        }
-
-        // The configured model has to exist, or the failure only shows up as a
-        // 404 at the moment a question is asked.
-        if !self.ai.models.is_empty() && !self.ai.models.contains(&self.prefs.ai_model) {
-            ui.label(
-                RichText::new(format!(
-                    "\u{201c}{}\u{201d} is not installed. Pick one above.",
-                    self.prefs.ai_model
-                ))
-                .size(11.0)
-                .color(p.warning),
-            );
-            ui.add_space(4.0);
-        }
+        });
+        ui.add_space(10.0);
 
         // --- how much of the document goes with the question ---
         //
         // Kept in the panel rather than buried in settings: it changes what is
         // sent and what it costs, so it belongs where the question is asked.
         ui.horizontal(|ui| {
-            let current = assistant::scope_of(&self.prefs);
-            for scope in quark_ai::Scope::ALL {
-                let label = match scope {
-                    quark_ai::Scope::Page => "Page",
-                    quark_ai::Scope::Nearby => "Nearby",
-                    quark_ai::Scope::Whole => "Whole",
-                };
-                if widgets::text_button(ui, p, label, current == scope).clicked() {
-                    self.prefs.ai_scope = assistant::scope_key(scope).into();
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(widgets::micro_caps("Context"))
+                    .font(theme::strong(10.5))
+                    .color(p.text_faint),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let current = assistant::scope_of(&self.prefs);
+                let index = quark_ai::Scope::ALL
+                    .iter()
+                    .position(|s| *s == current)
+                    .unwrap_or(0);
+                let segments = [
+                    widgets::Segment::Text("Page"),
+                    widgets::Segment::Text("Nearby"),
+                    widgets::Segment::Text("Whole"),
+                ];
+                if let Some(i) = widgets::segmented(ui, p, &segments, index, false, 26.0) {
+                    self.prefs.ai_scope = assistant::scope_key(quark_ai::Scope::ALL[i]).into();
                 }
-            }
+            });
         });
-        ui.add_space(4.0);
+        ui.add_space(8.0);
 
         // --- conversation ---
-        let composer = 74.0;
+        let composer = 60.0;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .max_height((ui.available_height() - composer).max(60.0))
             .show(ui, |ui| {
                 if self.ai.turns.is_empty() {
-                    ui.add_space(14.0);
-                    ui.label(
-                        RichText::new("Ask about the document.")
-                            .size(12.0)
-                            .color(p.text_muted),
-                    );
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · {}",
-                            backend.label(),
-                            assistant::scope_of(&self.prefs).label()
-                        ))
-                        .size(11.0)
-                        .color(p.text_faint),
-                    );
+                    ui.add_space(28.0);
+                    ui.vertical_centered(|ui| {
+                        let (plate, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
+                        ui.painter().circle_filled(plate.center(), 22.0, p.accent_soft);
+                        icons::draw(
+                            ui.painter(),
+                            egui::Rect::from_center_size(plate.center(), egui::Vec2::splat(20.0)),
+                            Icon::Sparkle,
+                            p.accent_text,
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("Ask about the document")
+                                .font(theme::strong(13.0))
+                                .color(p.text_muted),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {}",
+                                backend.label(),
+                                assistant::scope_of(&self.prefs).label()
+                            ))
+                            .font(theme::body(11.5))
+                            .color(p.text_faint),
+                        );
+                    });
                     return;
                 }
+                let width = ui.available_width();
                 for turn in &self.ai.turns {
-                    ui.add_space(8.0);
-                    let who = if turn.mine { "You" } else { backend.label() };
-                    ui.label(
-                        RichText::new(who)
-                            .size(10.5)
-                            .color(if turn.mine { p.accent_text } else { p.text_faint }),
-                    );
+                    ui.add_space(10.0);
+                    if turn.mine {
+                        // The reader's own words, in a bubble on the right.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                            egui::Frame::new()
+                                .fill(p.accent_soft)
+                                .stroke(egui::Stroke::new(1.0, p.accent_alpha(0x50)))
+                                .corner_radius(egui::CornerRadius { nw: 16, ne: 16, sw: 16, se: 6 })
+                                .inner_margin(egui::Margin::symmetric(12, 9))
+                                .show(ui, |ui| {
+                                    ui.set_max_width(width * 0.84);
+                                    ui.label(
+                                        RichText::new(&turn.text).font(theme::body(12.5)).color(p.text),
+                                    );
+                                });
+                        });
+                        continue;
+                    }
+                    ui.horizontal(|ui| {
+                        let (plate, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                        ui.painter().circle_filled(plate.center(), 12.0, p.wash(0x10));
+                        icons::draw(
+                            ui.painter(),
+                            egui::Rect::from_center_size(plate.center(), egui::Vec2::splat(13.0)),
+                            Icon::Sparkle,
+                            p.accent_text,
+                        );
+                        ui.label(RichText::new(backend.label()).font(theme::strong(12.0)).color(p.text));
+                    });
                     if !turn.thinking.is_empty() {
                         egui::CollapsingHeader::new(
-                            RichText::new("Reasoning").size(10.5).color(p.text_faint),
+                            RichText::new("Reasoning").font(theme::strong(11.5)).color(p.text_faint),
                         )
                         .id_salt(turn as *const _ as usize)
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new(&turn.thinking)
-                                    .size(11.0)
+                                    .font(theme::body(11.5))
                                     .color(p.text_faint),
                             );
                         });
                     }
                     if !turn.text.is_empty() {
-                        ui.label(RichText::new(&turn.text).size(12.0).color(p.text));
+                        ui.label(RichText::new(&turn.text).font(theme::body(12.5)).color(p.text));
                     }
                     if let Some(note) = &turn.note {
-                        ui.label(RichText::new(note).size(11.0).color(p.warning));
+                        ui.label(RichText::new(note).font(theme::body(11.5)).color(p.warning));
                     }
                 }
                 ui.add_space(8.0);
             });
 
         // --- composer ---
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let busy = self.ai.in_flight.is_some();
         let mut send = false;
-        ui.horizontal(|ui| {
-            let width = ui.available_width() - 34.0;
-            let field = ui.add_enabled(
-                !busy,
-                egui::TextEdit::singleline(&mut self.ai.draft)
-                    .desired_width(width)
-                    .hint_text("Ask about this document"),
-            );
-            // Enter sends, so the composer behaves like every other chat box.
-            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                send = true;
-            }
-            if busy {
-                if widgets::tool_button(ui, p, Icon::Close, "Stop", true, true).clicked() {
-                    self.ai.service.cancel();
-                }
-            } else if widgets::tool_button(
-                ui,
-                p,
-                Icon::ChevronRight,
-                "Send",
-                false,
-                !self.ai.draft.trim().is_empty(),
-            )
-            .clicked()
-            {
-                send = true;
-            }
-        });
+        theme::recess(p)
+            .corner_radius(egui::CornerRadius::same(theme::RADIUS_CARD))
+            .inner_margin(egui::Margin { left: 12, right: 5, top: 5, bottom: 5 })
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let width = ui.available_width() - 42.0;
+                    let field = ui.add_enabled(
+                        !busy,
+                        egui::TextEdit::singleline(&mut self.ai.draft)
+                            .frame(egui::Frame::NONE)
+                            .font(theme::body(12.5))
+                            .margin(egui::Margin::symmetric(0, 8))
+                            .desired_width(width)
+                            .hint_text("Ask about this document"),
+                    );
+                    // Enter sends, so the composer behaves like every other chat box.
+                    if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        send = true;
+                    }
+                    if busy {
+                        if widgets::icon_button(ui, p, Icon::Close, "Stop", 34.0, true, true).clicked() {
+                            self.ai.service.cancel();
+                        }
+                    } else if send_button(ui, p, !self.ai.draft.trim().is_empty()).clicked() {
+                        send = true;
+                    }
+                });
+            });
         if send && self.ai.can_send() {
             self.send_question();
         }
     }
 
-    fn tool_rail(&mut self, ui: &mut egui::Ui, p: &Palette) {
+    /// The tool dock: the markup tools, in a floating column at the left.
+    fn tool_dock(&mut self, ui: &mut egui::Ui, p: &Palette) {
         egui::Panel::left("rail")
-            .exact_size(theme::RAIL_WIDTH)
+            .exact_size(theme::RAIL_WIDTH + theme::GAP * 1.5)
             .resizable(false)
             .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(p.rail)
-                    .inner_margin(egui::Margin::symmetric(8, 9)),
-            )
+            .frame(island_frame(
+                8,
+                egui::Margin { left: GAP_I, right: HALF_I, top: 0, bottom: GAP_I },
+            ))
             .show(ui, |ui| {
+                paint_island(ui, 8.0, p);
                 ui.vertical_centered(|ui| {
-                    ui.spacing_mut().item_spacing.y = 3.0;
+                    ui.spacing_mut().item_spacing.y = 4.0;
                     let has_doc = self.tab().is_some();
-                    for (tool, icon, tip) in TOOL_RAIL {
-                        let active = has_doc && self.tool == tool;
-                        if widgets::rail_button(ui, p, icon, tip, active, has_doc).clicked() {
-                            self.tool = tool;
+                    for (g, group) in TOOL_GROUPS.iter().enumerate() {
+                        if g > 0 {
+                            dock_rule(ui, p);
+                        }
+                        for &(tool, icon, tip) in group.iter() {
+                            let active = has_doc && self.tool == tool;
+                            let tip = widgets::platform_keys(tip);
+                            if widgets::rail_button(ui, p, icon, &tip, active, has_doc).clicked() {
+                                self.tool = tool;
+                            }
                         }
                     }
                 });
             });
     }
 
-    /// The navigation sidebar: which structural panel the list column shows.
-    fn nav_sidebar(&mut self, ui: &mut egui::Ui, p: &Palette) {
-        let ctx = &ui.ctx().clone();
-        egui::Panel::left("nav")
-            .exact_size(theme::NAV_WIDTH)
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(p.card)
-                    .inner_margin(egui::Margin::symmetric(9, 11)),
-            )
-            .show(ui, |ui| {
-                theme::hairline(ui.painter(), ui.max_rect(), p, theme::Edge::Right);
-                ui.spacing_mut().item_spacing.y = 2.0;
-
-                let title = self
-                    .tab()
-                    .map(|t| widgets::elide(&t.title(), 18, true))
-                    .unwrap_or_else(|| "Quark".into());
-                widgets::nav_title(ui, p, &title);
-                ui.add_space(9.0);
-
-                for (panel, icon, label) in NAV_PANELS {
-                    // Selecting the panel already showing closes the column,
-                    // which is the only way to give the document full width.
-                    let active = self.prefs.side_panel == panel;
-                    if widgets::nav_item(ui, p, icon, label, active).clicked() {
-                        self.prefs.side_panel = if active { SidePanel::None } else { panel };
-                    }
-                }
-
-                // The page count sits at the foot of the rail in the reference,
-                // where it is out of the way but always readable.
-                let footer = self
-                    .tab()
-                    .map(|t| format!("{} pages", t.page_count().max(1)))
-                    .unwrap_or_default();
-                if !footer.is_empty() {
-                    let avail = ui.available_height();
-                    ui.add_space((avail - 20.0).max(0.0));
-                    ui.label(RichText::new(footer).size(11.0).color(p.text_faint));
-                }
-                let _ = ctx;
-            });
-    }
-
-    /// The right-hand dock: comments, and the assistant once it has a backend.
+    /// The right-hand dock: comments, and the assistant.
     fn dock_panel(&mut self, ui: &mut egui::Ui, p: &Palette) {
         if !self.dock_open || self.tab().is_none() {
             return;
         }
         let mut action = PanelAction::None;
-        // Flush and flat, so the frame contributes no margin — but the width is
-        // still stored through `total_margin`, because `default_size` is an
-        // outer width while `available_width` is the width inside the frame.
-        // Reading one and writing the other is what walked the side panel down
-        // to its floor once per launch.
-        // Horizontal padding belongs on the frame, not on each pane: without
-        // it the contents start hard against the panel edge and clip.
-        let frame = egui::Frame::new()
-            .fill(p.card)
-            .inner_margin(egui::Margin::symmetric(10, 0));
+        let frame = island_frame(
+            10,
+            egui::Margin { left: HALF_I, right: GAP_I, top: 0, bottom: GAP_I },
+        );
+        // The width is stored through `total_margin`, because `default_size`
+        // is an outer width while `available_width` is the width inside the
+        // frame. Reading one and writing the other is what walked the side
+        // panel down to its floor once per launch.
         let chrome_width = frame.total_margin().sum().x;
+        let count = self.tab().map(|t| t.all_annotations().len()).unwrap_or(0);
 
         egui::Panel::right("dock")
             .resizable(true)
@@ -685,28 +838,21 @@ impl App {
             .show_separator_line(false)
             .frame(frame)
             .show(ui, |ui| {
-                theme::hairline(ui.painter(), ui.max_rect(), p, theme::Edge::Left);
+                paint_island(ui, 10.0, p);
                 self.prefs.dock_width = ui.available_width() + chrome_width;
 
-                // Tab strip for the dock.
-                ui.add_space(7.0);
-                ui.horizontal(|ui| {
-                    for (which, label) in [(Dock::Comments, "Comments"), (Dock::Assistant, "Assistant")] {
-                        if widgets::text_button(ui, p, label, self.dock == which).clicked() {
-                            self.dock = which;
-                        }
-                    }
-                });
-                ui.add_space(5.0);
-                let line = ui.max_rect();
-                ui.painter().line_segment(
-                    [
-                        egui::pos2(line.left(), ui.cursor().top()),
-                        egui::pos2(line.right(), ui.cursor().top()),
-                    ],
-                    egui::Stroke::new(1.0, p.border),
-                );
-                ui.add_space(7.0);
+                let segments = [
+                    widgets::Segment::Counted("Comments", count),
+                    widgets::Segment::Labelled(Icon::Sparkle, "Assistant"),
+                ];
+                let current = match self.dock {
+                    Dock::Comments => 0,
+                    Dock::Assistant => 1,
+                };
+                if let Some(i) = widgets::segmented(ui, p, &segments, current, true, 32.0) {
+                    self.dock = if i == 0 { Dock::Comments } else { Dock::Assistant };
+                }
+                ui.add_space(12.0);
 
                 match self.dock {
                     Dock::Comments => {
@@ -731,369 +877,291 @@ impl App {
         self.handle_panel_action(action, &ui.ctx().clone());
     }
 
-    /// The document toolbar: identity on the left, navigation centred, actions
-    /// on the right.
+    /// The header row at the top of the canvas well: which document this is
+    /// on the left, the document's actions on the right.
     ///
-    /// The tool strip and the panel toggles that used to live here are gone —
-    /// the rail owns tools and the nav owns panels, and a control that exists
-    /// in two places teaches that neither one is authoritative.
-    fn toolbar(&mut self, ui: &mut egui::Ui, p: &Palette) {
-        // Panels are drawn into the parent `Ui` in this version of egui; the
-        // context is still needed for dispatch, and cloning it is just an Arc.
-        let ctx = &ui.ctx().clone();
-        egui::Panel::top("toolbar")
-            .exact_size(theme::bar_panel_size(theme::TOOLBAR_HEIGHT))
-            .show_separator_line(false)
-            .frame(theme::bar(p))
-            .show(ui, |ui| {
-                let bar = ui.max_rect();
-                theme::hairline(ui.painter(), bar, p, theme::Edge::Bottom);
-                let has_doc = self.tab().is_some();
+    /// Page and zoom are not here: they float in the capsule at the foot of
+    /// the canvas, beside what they act on. The tool strip and the panel
+    /// toggles that used to crowd a toolbar are gone too — the dock owns tools
+    /// and the pages island owns panels, and a control that exists in two
+    /// places teaches that neither one is authoritative.
+    fn canvas_header(&mut self, ui: &mut egui::Ui, p: &Palette, ctx: &Context) {
+        let (bar, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::TOOLBAR_HEIGHT),
+            egui::Sense::hover(),
+        );
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bar.shrink2(egui::vec2(10.0, 0.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        let ui = &mut row;
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let has_doc = self.tab().is_some();
 
-                // --- left: which document this is ---
-                ui.horizontal_centered(|ui| {
-                    let (name, folder) = self
-                        .tab()
-                        .map(|t| {
-                            let name = widgets::elide(&t.title(), 22, true);
-                            let folder = t
-                                .path()
-                                .and_then(|q| q.parent().map(|d| d.to_string_lossy().into_owned()))
-                                .map(|d| widgets::elide(&d, 24, false))
-                                .unwrap_or_default();
-                            (name, folder)
-                        })
-                        .unwrap_or_else(|| (String::from("No document"), String::new()));
-                    widgets::file_chip(ui, p, &name, &folder);
-                });
+        let side_open = self.prefs.side_panel != SidePanel::None;
+        let tip = if side_open { "Hide the side panel (F4)" } else { "Show the side panel (F4)" };
+        if widgets::tool_button(ui, p, Icon::SidebarLeft, tip, side_open, has_doc).clicked() {
+            self.prefs.side_panel = if side_open {
+                SidePanel::None
+            } else {
+                self.last_side_panel
+            };
+        }
+        ui.add_space(8.0);
 
-                // --- centre: page and zoom, truly centred on the bar ---
-                //
-                // Placed at an explicit rect rather than reached by padding:
-                // the left and right groups change width with the filename and
-                // the theme icon, and anything measured from them drifts.
-                let centre = egui::Rect::from_center_size(
-                    bar.center(),
-                    egui::vec2(CENTRE_GROUP_WIDTH, bar.height()),
+        // --- which document this is ---
+        //
+        // The folder is the disambiguator, and the page size and protection
+        // that the old status bar carried ride along on the same line.
+        let (name, detail) = self
+            .tab()
+            .map(|t| {
+                let name = widgets::elide(&t.title(), 32, true);
+                let mut parts = Vec::new();
+                if let Some(dir) = t.path().and_then(|q| q.parent()) {
+                    // The end of a folder path is the part that tells two
+                    // documents apart, so that is the part kept.
+                    parts.push(widgets::elide(&tilde(dir), 34, true));
+                }
+                let size = t.info.page_size(t.current_page);
+                parts.push(format!("{:.2} × {:.2} in", size.width / 72.0, size.height / 72.0));
+                if t.info.encrypted {
+                    parts.push("Protected".to_string());
+                }
+                if t.info.likely_scanned {
+                    parts.push("No text layer — scanned?".to_string());
+                }
+                (name, parts.join("  ·  "))
+            })
+            .unwrap_or_else(|| (String::from("No document"), String::new()));
+        widgets::file_chip(ui, p, &name, &detail);
+
+        // --- what can be done to it ---
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if widgets::tool_button(ui, p, Icon::Sidebar, "Comments and assistant", self.dock_open, has_doc)
+                .clicked()
+            {
+                self.dock_open = !self.dock_open;
+            }
+            if widgets::tool_button(ui, p, Icon::Search, &widgets::platform_keys("Find (Ctrl+F)"), false, has_doc)
+                .clicked()
+            {
+                self.dispatch(Command::Find, ctx);
+            }
+            widgets::separator(ui, p);
+            if widgets::tool_button(ui, p, Icon::Print, &widgets::platform_keys("Print (Ctrl+P)"), false, has_doc)
+                .clicked()
+            {
+                self.dispatch(Command::Print, ctx);
+            }
+            let dirty = self.tab().map(|t| t.has_unsaved_changes()).unwrap_or(false);
+            let save = widgets::tool_button(
+                ui,
+                p,
+                Icon::Save,
+                &widgets::platform_keys(if dirty { "Save (Ctrl+S) — unsaved changes" } else { "Save (Ctrl+S)" }),
+                false,
+                has_doc,
+            );
+            if dirty {
+                ui.painter().circle(
+                    save.rect.right_top() + egui::vec2(-7.0, 7.0),
+                    3.5,
+                    p.accent,
+                    egui::Stroke::new(2.0, p.canvas),
                 );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(centre), |ui| {
-                    ui.horizontal_centered(|ui| {
-                        let (page, count) = self
-                            .tab()
-                            .map(|t| (t.current_page, t.page_count()))
-                            .unwrap_or((0, 0));
-
-                        widgets::pill(ui, p, |ui| {
-                            if widgets::tool_button(
-                                ui,
-                                p,
-                                Icon::ChevronUp,
-                                "Previous page",
-                                false,
-                                page > 0,
-                            )
-                            .clicked()
-                            {
-                                self.dispatch(Command::PrevPage, ctx);
-                            }
-                            let label = if count == 0 {
-                                String::from("—")
-                            } else {
-                                format!("{} / {}", page + 1, count)
-                            };
-                            ui.label(RichText::new(label).size(12.0).color(p.text_muted));
-                            if widgets::tool_button(
-                                ui,
-                                p,
-                                Icon::ChevronDown,
-                                "Next page",
-                                false,
-                                count > 0 && page + 1 < count,
-                            )
-                            .clicked()
-                            {
-                                self.dispatch(Command::NextPage, ctx);
-                            }
-                        });
-
-                        ui.add_space(6.0);
-
-                        widgets::pill(ui, p, |ui| {
-                            if widgets::tool_button(
-                                ui,
-                                p,
-                                Icon::ZoomOut,
-                                "Zoom out (Ctrl+-)",
-                                false,
-                                has_doc,
-                            )
-                            .clicked()
-                            {
-                                self.dispatch(Command::ZoomOut, ctx);
-                            }
-                            let zoom_label = self
-                                .tab()
-                                .map(|t| format!("{:.0}%", t.layout.scale * 100.0))
-                                .unwrap_or_else(|| String::from("—"));
-                            ui.menu_button(zoom_label, |ui| {
-                                for (label, mode) in [
-                                    ("Fit Width", ZoomMode::FitWidth),
-                                    ("Fit Page", ZoomMode::FitPage),
-                                    ("Fit Height", ZoomMode::FitHeight),
-                                    ("Actual Size", ZoomMode::Actual),
-                                ] {
-                                    if ui.button(label).clicked() {
-                                        self.dispatch(Command::SetZoom(mode), ctx);
-                                        ui.close();
-                                    }
-                                }
-                                ui.separator();
-                                for z in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0] {
-                                    if ui.button(format!("{:.0}%", z * 100.0)).clicked() {
-                                        self.dispatch(Command::SetZoom(ZoomMode::Custom(z)), ctx);
-                                        ui.close();
-                                    }
-                                }
-                            });
-                            if widgets::tool_button(
-                                ui,
-                                p,
-                                Icon::ZoomIn,
-                                "Zoom in (Ctrl+=)",
-                                false,
-                                has_doc,
-                            )
-                            .clicked()
-                            {
-                                self.dispatch(Command::ZoomIn, ctx);
-                            }
-                        });
-
-                        ui.add_space(8.0);
-                        widgets::separator(ui, p);
-                        ui.add_space(2.0);
-
-                        let can_undo = self.tab().map(|t| t.history.can_undo()).unwrap_or(false);
-                        let can_redo = self.tab().map(|t| t.history.can_redo()).unwrap_or(false);
-                        if widgets::tool_button(ui, p, Icon::Undo, "Undo (Ctrl+Z)", false, can_undo)
-                            .clicked()
-                        {
-                            self.dispatch(Command::Undo, ctx);
-                        }
-                        if widgets::tool_button(ui, p, Icon::Redo, "Redo (Ctrl+Y)", false, can_redo)
-                            .clicked()
-                        {
-                            self.dispatch(Command::Redo, ctx);
-                        }
-                        let dirty = self.tab().map(|t| t.has_unsaved_changes()).unwrap_or(false);
-                        if widgets::tool_button(ui, p, Icon::Save, "Save (Ctrl+S)", dirty, has_doc)
-                            .clicked()
-                        {
-                            self.save(false);
-                        }
-                        if widgets::tool_button(ui, p, Icon::Print, "Print (Ctrl+P)", false, has_doc)
-                            .clicked()
-                        {
-                            self.dispatch(Command::Print, ctx);
-                        }
-                    });
-                });
-
-                // --- right: search, the dock, and the theme ---
-                ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let dark = self.theme.is_dark();
-                        if widgets::tool_button(
-                            ui,
-                            p,
-                            if dark { Icon::Sun } else { Icon::Moon },
-                            "Toggle light/dark theme",
-                            false,
-                            true,
-                        )
-                        .clicked()
-                        {
-                            self.dispatch(Command::ToggleTheme, ctx);
-                        }
-                        if widgets::tool_button(
-                            ui,
-                            p,
-                            Icon::Comment,
-                            "Comments and assistant",
-                            self.dock_open,
-                            has_doc,
-                        )
-                        .clicked()
-                        {
-                            self.dock_open = !self.dock_open;
-                        }
-                        if widgets::tool_button(ui, p, Icon::Search, "Find (Ctrl+F)", false, has_doc)
-                            .clicked()
-                        {
-                            self.dispatch(Command::Find, ctx);
-                        }
-                    });
-                });
-            });
-    }
-    fn tab_strip(&mut self, ui: &mut egui::Ui, p: &Palette) {
-        // Panels are drawn into the parent `Ui` in this version of egui; the
-        // context is still needed for dispatch, and cloning it is just an Arc.
-        let _ctx = &ui.ctx().clone();
-        // Home is always in the strip, so unlike before there is no count at
-        // which the strip is not worth drawing.
-        egui::Panel::top("tabs")
-            .exact_size(theme::bar_panel_size(theme::TAB_HEIGHT))
-            .show_separator_line(false)
-            .frame(theme::bar(p))
-            .show(ui, |ui| {
-                let mut to_close = None;
-                let mut to_select = None;
-                let mut go_home = false;
-                egui::ScrollArea::horizontal()
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            // Home first and always, with no close button —
-                            // there is nothing to close, and an X that does
-                            // nothing invites the click anyway.
-                            if widgets::text_button(ui, p, "Home", self.home.visible).clicked() {
-                                go_home = true;
-                            }
-                            widgets::separator(ui, p);
-
-                            for (i, tab) in self.tabs.iter().enumerate() {
-                                let active = !self.home.visible && i == self.active;
-                                let title = widgets::elide(&tab.title(), 26, true);
-                                let label = if tab.has_unsaved_changes() {
-                                    format!("• {title}")
-                                } else {
-                                    title
-                                };
-                                if widgets::text_button(ui, p, &label, active).clicked() {
-                                    to_select = Some(i);
-                                }
-                                if widgets::tool_button(ui, p, Icon::Close, "Close", false, true)
-                                    .clicked()
-                                {
-                                    to_close = Some(i);
-                                }
-                                widgets::separator(ui, p);
-                            }
-                        });
-                    });
-                if go_home {
-                    self.show_home();
-                }
-                if let Some(i) = to_select {
-                    self.show_tab(i);
-                    self.textures.clear();
-                }
-                if let Some(i) = to_close {
-                    self.close_tab(i);
-                }
-            });
+            }
+            if save.clicked() {
+                self.save(false);
+            }
+            widgets::separator(ui, p);
+            let can_redo = self.tab().map(|t| t.history.can_redo()).unwrap_or(false);
+            if widgets::tool_button(ui, p, Icon::Redo, &widgets::platform_keys("Redo (Ctrl+Y)"), false, can_redo)
+                .clicked()
+            {
+                self.dispatch(Command::Redo, ctx);
+            }
+            let can_undo = self.tab().map(|t| t.history.can_undo()).unwrap_or(false);
+            if widgets::tool_button(ui, p, Icon::Undo, &widgets::platform_keys("Undo (Ctrl+Z)"), false, can_undo)
+                .clicked()
+            {
+                self.dispatch(Command::Undo, ctx);
+            }
+        });
     }
 
-    fn status_bar(&mut self, ui: &mut egui::Ui, p: &Palette) {
-        // Panels are drawn into the parent `Ui` in this version of egui; the
-        // context is still needed for dispatch, and cloning it is just an Arc.
-        let _ctx = &ui.ctx().clone();
-        egui::Panel::bottom("status")
-            .exact_size(theme::bar_panel_size(theme::STATUS_HEIGHT))
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(p.card)
-                    .stroke(egui::Stroke::new(1.0, p.border))
-                    .corner_radius(egui::CornerRadius::same(theme::RADIUS_GLASS))
-                    .outer_margin(egui::Margin {
-                        left: theme::GLASS_INSET,
-                        right: theme::GLASS_INSET,
-                        top: 0,
-                        bottom: theme::GLASS_INSET,
-                    })
-                    .inner_margin(egui::Margin::symmetric(12, 3)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    let small = |s: String| RichText::new(s).size(11.0);
-                    match self.tab() {
-                        Some(tab) => {
-                            ui.label(small(format!(
-                                "Page {} of {}",
-                                tab.current_page + 1,
-                                tab.page_count().max(1)
-                            )));
-                            ui.label(RichText::new("·").color(p.text_faint));
-                            let size = tab.info.page_size(tab.current_page);
-                            ui.label(
-                                small(format!(
-                                    "{:.2} × {:.2} in",
-                                    size.width / 72.0,
-                                    size.height / 72.0
-                                ))
-                                .color(p.text_muted),
-                            );
-                            if tab.info.encrypted {
-                                ui.label(RichText::new("·").color(p.text_faint));
-                                ui.label(small("Protected".into()).color(p.warning));
-                            }
-                            if tab.info.likely_scanned {
-                                ui.label(RichText::new("·").color(p.text_faint));
-                                ui.label(
-                                    small("No text layer — scanned?".into()).color(p.text_muted),
-                                );
-                            }
-                        }
-                        None => {
-                            ui.label(small("No document open".into()).color(p.text_faint));
-                        }
+    /// The page and zoom controls, floating at the foot of the canvas.
+    fn page_capsule(&mut self, ctx: &Context, p: &Palette, canvas: egui::Rect) {
+        let Some(tab) = self.tab() else { return };
+        let (page, count, scale) = (tab.current_page, tab.page_count(), tab.layout.scale);
+
+        egui::Area::new(egui::Id::new("page-capsule"))
+            .order(egui::Order::Middle)
+            .movable(false)
+            .pivot(egui::Align2::CENTER_BOTTOM)
+            .fixed_pos(canvas.center_bottom() - egui::vec2(0.0, 18.0))
+            .show(ctx, |ui| {
+                widgets::capsule(ui, p, |ui| {
+                    if widgets::tool_button(ui, p, Icon::ChevronUp, "Previous page", false, page > 0)
+                        .clicked()
+                    {
+                        self.dispatch(Command::PrevPage, ctx);
+                    }
+                    ui.add_space(4.0);
+                    if count == 0 {
+                        ui.label(RichText::new("—").font(theme::strong(13.0)).color(p.text_faint));
+                    } else {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.label(
+                            RichText::new((page + 1).to_string())
+                                .font(theme::heavy(13.0))
+                                .color(p.text),
+                        );
+                        ui.label(
+                            RichText::new(format!(" / {count}"))
+                                .font(theme::body(13.0))
+                                .color(p.text_faint),
+                        );
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                    }
+                    ui.add_space(4.0);
+                    if widgets::tool_button(
+                        ui,
+                        p,
+                        Icon::ChevronDown,
+                        "Next page",
+                        false,
+                        count > 0 && page + 1 < count,
+                    )
+                    .clicked()
+                    {
+                        self.dispatch(Command::NextPage, ctx);
                     }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Newest toast wins the space.
-                        if let Some(t) = self.toasts.last() {
-                            ui.label(
-                                RichText::new(&t.text)
-                                    .size(11.0)
-                                    .color(if t.error { p.error } else { p.success }),
-                            );
-                        } else {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{:.0} MB cached · {} textures",
-                                    self.textures.used_mb(),
-                                    self.textures.len()
-                                ))
-                                .size(10.0)
-                                .color(p.text_faint),
-                            );
+                    widgets::separator(ui, p);
+
+                    if widgets::tool_button(ui, p, Icon::ZoomOut, &widgets::platform_keys("Zoom out (Ctrl+-)"), false, true)
+                        .clicked()
+                    {
+                        self.dispatch(Command::ZoomOut, ctx);
+                    }
+                    let zoom = zoom_button(ui, p, &format!("{:.0}%", scale * 100.0));
+                    egui::Popup::menu(&zoom).show(|ui| {
+                        ui.set_min_width(200.0);
+                        for (label, mode, keys) in [
+                            ("Fit Width", ZoomMode::FitWidth, "Ctrl+2"),
+                            ("Fit Page", ZoomMode::FitPage, "Ctrl+0"),
+                            ("Fit Height", ZoomMode::FitHeight, "Ctrl+3"),
+                            ("Actual Size", ZoomMode::Actual, "Ctrl+1"),
+                        ] {
+                            let button = egui::Button::new(label).shortcut_text(widgets::platform_keys(keys));
+                            if ui.add(button).clicked() {
+                                self.dispatch(Command::SetZoom(mode), ctx);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        for z in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0] {
+                            let on = (scale - z).abs() < 0.005;
+                            if ui.selectable_label(on, format!("{:.0}%", z * 100.0)).clicked() {
+                                self.dispatch(Command::SetZoom(ZoomMode::Custom(z)), ctx);
+                                ui.close();
+                            }
                         }
                     });
+                    if widgets::tool_button(ui, p, Icon::ZoomIn, &widgets::platform_keys("Zoom in (Ctrl+=)"), false, true)
+                        .clicked()
+                    {
+                        self.dispatch(Command::ZoomIn, ctx);
+                    }
+
+                    widgets::separator(ui, p);
+
+                    if widgets::tool_button(ui, p, Icon::FitWidth, &widgets::platform_keys("Fit width (Ctrl+2)"), false, true)
+                        .clicked()
+                    {
+                        self.dispatch(Command::SetZoom(ZoomMode::FitWidth), ctx);
+                    }
                 });
             });
     }
 
-    /// The list column: whatever the nav sidebar has selected.
+    /// The newest messages, floating at the bottom-right of the work area.
+    ///
+    /// They used to share the status bar's single line, where a second
+    /// message silently replaced the first; stacked, the last three are all
+    /// readable.
+    fn toasts_overlay(&self, ctx: &Context, p: &Palette, area: egui::Rect) {
+        if self.toasts.is_empty() {
+            return;
+        }
+        egui::Area::new(egui::Id::new("toasts"))
+            .order(egui::Order::Foreground)
+            .movable(false)
+            .interactable(false)
+            .pivot(egui::Align2::RIGHT_BOTTOM)
+            .fixed_pos(area.right_bottom() - egui::vec2(18.0, 20.0))
+            .show(ctx, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    let start = self.toasts.len().saturating_sub(3);
+                    for t in &self.toasts[start..] {
+                        toast(ui, p, &t.text, t.error, t.ttl);
+                    }
+                });
+            });
+    }
+
+    /// Tiles the velvet grain over the window ground.
+    ///
+    /// Built once per theme: the grain is white in the dark theme and ink in
+    /// the light one.
+    fn paint_grain(&mut self, ui: &egui::Ui, rect: egui::Rect, p: &Palette) {
+        let dark = p.is_dark();
+        if self.grain.as_ref().map(|(d, _)| *d) != Some(dark) {
+            let options = egui::TextureOptions {
+                wrap_mode: egui::TextureWrapMode::Repeat,
+                ..egui::TextureOptions::NEAREST
+            };
+            let texture = ui
+                .ctx()
+                .load_texture("velvet-grain", theme::grain_image(p), options);
+            self.grain = Some((dark, texture));
+        }
+        if let Some((_, tex)) = &self.grain {
+            let tile = tex.size_vec2();
+            let uv = egui::Rect::from_min_max(
+                egui::Pos2::ZERO,
+                egui::pos2(rect.width() / tile.x, rect.height() / tile.y),
+            );
+            ui.painter().image(tex.id(), rect, uv, egui::Color32::WHITE);
+        }
+    }
+
+    /// The pages island: whichever structural panel its segments select.
+    ///
+    /// The segments replace the old navigation column beside the list — one
+    /// island where there were two, which gives the document back the width
+    /// that column took.
     fn side_panel(&mut self, ui: &mut egui::Ui, p: &Palette) {
         // Panels are drawn into the parent `Ui` in this version of egui; the
         // context is still needed for dispatch, and cloning it is just an Arc.
         let ctx = &ui.ctx().clone();
-        // Home carries its own rail, and the document panels have no document
-        // to describe while it is showing.
+        // Home carries its own islands, and the document panels have no
+        // document to describe while it is showing.
         if self.prefs.side_panel == SidePanel::None || self.tabs.is_empty() || self.home.visible {
             return;
         }
         let which = self.prefs.side_panel;
+        self.last_side_panel = which;
         let mut action = PanelAction::None;
 
-        // Flush and flat: fill plus the hairline that separates it from the
-        // canvas. No inset, no rounding, no shadow, so `default_size` and
-        // `available_width` differ only by the inner margin.
-        let frame = egui::Frame::new()
-            .fill(p.card)
-            .inner_margin(egui::Margin::symmetric(8, 10));
+        let frame = island_frame(
+            10,
+            egui::Margin { left: HALF_I, right: HALF_I, top: 0, bottom: GAP_I },
+        );
         // `default_size` is an outer width but `available_width` is the width
         // inside the frame, so storing the latter directly loses the margins
         // once per launch — the panel walks itself down to the floor over a
@@ -1103,12 +1171,29 @@ impl App {
         egui::Panel::left("side")
             .resizable(true)
             .default_size(self.prefs.side_panel_width.max(theme::LIST_WIDTH))
-            .size_range(170.0..=520.0)
+            .size_range(200.0..=520.0)
             .show_separator_line(false)
             .frame(frame)
             .show(ui, |ui| {
-                theme::hairline(ui.painter(), ui.max_rect(), p, theme::Edge::Right);
+                paint_island(ui, 10.0, p);
                 self.prefs.side_panel_width = ui.available_width() + chrome_width;
+
+                let segments: Vec<widgets::Segment<'_>> = NAV_PANELS
+                    .iter()
+                    .map(|&(_, icon, label)| widgets::Segment::Icon(icon, label))
+                    .collect();
+                let current = NAV_PANELS
+                    .iter()
+                    .position(|&(panel, ..)| panel == which)
+                    .unwrap_or(usize::MAX);
+                if let Some(i) = widgets::segmented(ui, p, &segments, current, true, 32.0) {
+                    let panel = NAV_PANELS[i].0;
+                    // Picking the segment already showing closes the island,
+                    // the quickest way to give the document the full width.
+                    self.prefs.side_panel = if panel == which { SidePanel::None } else { panel };
+                }
+                ui.add_space(12.0);
+
                 let Some(index) = self.tabs.get_mut(self.active).map(|_| self.active) else {
                     return;
                 };
@@ -1194,62 +1279,175 @@ impl App {
 
     fn command_palette(&mut self, ctx: &Context, p: &Palette) {
         if !self.show_palette {
+            self.palette_was_open = false;
             return;
         }
+        // The click that opened the palette lands on its backdrop in the same
+        // frame, and a backdrop click closes it — so on the frame it opens,
+        // that click is not counted.
+        let just_opened = !self.palette_was_open;
+        self.palette_was_open = true;
+        let q = self.palette_query.to_lowercase();
+        let table = command_table();
+        let matches: Vec<_> = table
+            .iter()
+            .filter(|c| q.is_empty() || c.label.to_lowercase().contains(&q))
+            .take(200)
+            .collect();
+
+        // The keyboard drives the list as well as the pointer: arrows move the
+        // highlight and Enter runs it, so a command is reachable without
+        // leaving the keys.
+        let (down, up, enter) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowDown),
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::Enter),
+            )
+        });
+        let last = matches.len().saturating_sub(1);
+        if down {
+            self.palette_index = (self.palette_index + 1).min(last);
+        }
+        if up {
+            self.palette_index = self.palette_index.saturating_sub(1);
+        }
+        self.palette_index = self.palette_index.min(last);
+
         let mut chosen = None;
-        egui::Modal::new(egui::Id::new("palette")).show(ctx, |ui| {
-            ui.set_min_width(460.0);
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut self.palette_query)
-                    .hint_text("Type a command")
-                    .desired_width(f32::INFINITY),
-            );
-            field.request_focus();
-            ui.add_space(6.0);
+        if enter {
+            if let Some(c) = matches.get(self.palette_index) {
+                if self.command_enabled(&c.command, c.mutates) {
+                    chosen = Some(c.command.clone());
+                }
+            }
+        }
 
-            let q = self.palette_query.to_lowercase();
-            let table = command_table();
-            let matches: Vec<_> = table
-                .iter()
-                .filter(|c| q.is_empty() || c.label.to_lowercase().contains(&q))
-                .take(200)
-                .collect();
+        let area = egui::Modal::default_area(egui::Id::new("palette"))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 96.0));
+        let modal = egui::Modal::new(egui::Id::new("palette"))
+            .area(area)
+            .frame(theme::dialog(p).inner_margin(egui::Margin::same(8)))
+            .backdrop_color(theme::scrim(p))
+            .show(ctx, |ui| {
+                ui.set_width(600.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    let (glyph, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                    icons::draw(ui.painter(), glyph, Icon::Search, p.accent_text);
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut self.palette_query)
+                            .frame(egui::Frame::NONE)
+                            .hint_text("Type a command")
+                            .font(theme::body(15.0))
+                            .margin(egui::Margin::symmetric(4, 12))
+                            .desired_width(ui.available_width() - 52.0),
+                    );
+                    field.request_focus();
+                    if field.changed() {
+                        self.palette_index = 0;
+                    }
+                    widgets::kbd(ui, p, "Esc");
+                });
+                hairline(ui, p);
 
-            egui::ScrollArea::vertical()
-                .max_height(360.0)
-                .show(ui, |ui| {
-                    for c in matches {
-                        let enabled = self.command_enabled(&c.command, c.mutates);
-                        ui.horizontal(|ui| {
-                            let r = ui.add_enabled(
-                                enabled,
-                                egui::Button::new(c.label).min_size(egui::vec2(320.0, 0.0)),
-                            );
+                egui::ScrollArea::vertical()
+                    .max_height(380.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        if matches.is_empty() {
+                            ui.add_space(10.0);
                             ui.label(
-                                RichText::new(c.menu.label())
-                                    .size(10.0)
+                                RichText::new(format!("No command matches \u{201c}{}\u{201d}.", self.palette_query))
+                                    .font(theme::body(12.5))
                                     .color(p.text_faint),
                             );
-                            if !c.shortcut.is_empty() {
-                                ui.label(
-                                    RichText::new(c.shortcut).size(10.0).color(p.accent_text),
-                                );
+                            ui.add_space(10.0);
+                        }
+                        for (i, c) in matches.iter().enumerate() {
+                            let enabled = self.command_enabled(&c.command, c.mutates);
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 42.0),
+                                egui::Sense::click(),
+                            );
+                            // Follow the pointer only when it moves, so a list
+                            // scrolled by the keyboard is not snatched back by
+                            // a mouse resting over it.
+                            if response.hovered() && ui.input(|inp| inp.pointer.delta() != egui::Vec2::ZERO) {
+                                self.palette_index = i;
                             }
-                            if r.clicked() {
+                            let selected = i == self.palette_index;
+                            if selected && (up || down) {
+                                response.scroll_to_me(None);
+                            }
+                            if ui.is_rect_visible(rect) {
+                                let painter = ui.painter();
+                                let radius = egui::CornerRadius::same(13);
+                                if selected {
+                                    painter.rect_filled(rect, radius, p.accent_soft);
+                                    painter.rect_stroke(
+                                        rect,
+                                        radius,
+                                        egui::Stroke::new(1.0, p.accent_alpha(0x60)),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                                let (colour, strong) = if enabled {
+                                    (if selected { p.text } else { p.text_muted }, p.text)
+                                } else {
+                                    (p.text_disabled, p.text_disabled)
+                                };
+                                let galley = painter.layout_job(highlighted(c.label, &q, colour, strong));
+                                painter.galley(
+                                    egui::pos2(rect.left() + 14.0, rect.center().y - galley.size().y / 2.0),
+                                    galley,
+                                    colour,
+                                );
+                                let mut x = rect.right() - 12.0;
+                                x = widgets::paint_tag(painter, x, rect.center().y, c.menu.label(), p);
+                                if !c.shortcut.is_empty() {
+                                    widgets::paint_keys(painter, x - 10.0, rect.center().y, c.shortcut, p);
+                                }
+                            }
+                            if response.clicked() && enabled {
                                 chosen = Some(c.command.clone());
                             }
-                        });
-                    }
-                });
-        });
+                        }
+                    });
 
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                hairline(ui, p);
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    widgets::kbd(ui, p, "↑");
+                    widgets::kbd(ui, p, "↓");
+                    ui.label(RichText::new("to move").font(theme::body(11.5)).color(p.text_faint));
+                    ui.add_space(10.0);
+                    widgets::kbd(ui, p, "Enter");
+                    ui.label(RichText::new("to run").font(theme::body(11.5)).color(p.text_faint));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(10.0);
+                        let n = matches.len();
+                        ui.label(
+                            RichText::new(format!("{n} command{}", if n == 1 { "" } else { "s" }))
+                                .font(theme::body(11.5))
+                                .color(p.text_faint),
+                        );
+                    });
+                });
+                ui.add_space(2.0);
+            });
+
+        if modal.should_close() && !just_opened {
             self.show_palette = false;
             self.palette_query.clear();
+            self.palette_index = 0;
         }
         if let Some(cmd) = chosen {
             self.show_palette = false;
             self.palette_query.clear();
+            self.palette_index = 0;
             self.dispatch(cmd, ctx);
         }
     }
@@ -1491,6 +1689,13 @@ impl App {
                 if let Some(t) = self.tab_mut() {
                     t.bump_token();
                 }
+            }
+            // Comments live in the dock, so asking for them opens the dock
+            // rather than putting a second copy in the pages island.
+            Command::TogglePanel(SidePanel::Comments) => {
+                let showing = self.dock_open && self.dock == Dock::Comments;
+                self.dock = Dock::Comments;
+                self.dock_open = !showing;
             }
             Command::TogglePanel(panel) => {
                 self.prefs.side_panel = if self.prefs.side_panel == panel {
@@ -2137,18 +2342,23 @@ impl eframe::App for App {
         self.drain_service(ctx);
         self.drain_assistant(ctx);
 
-        // A flat ground behind the panels. Nothing drifts any more, so this
-        // also drops the continuous 30fps repaint the ambient light needed —
-        // Quark now idles at zero frames like any other document viewer.
-        ui.painter()
-            .rect_filled(ui.max_rect(), egui::CornerRadius::ZERO, p.ground);
+        // The velvet ground: a fill, the soft light that falls on it from
+        // above, and the grain. All of it is static, so Quark still idles at
+        // zero frames like any other document viewer.
+        let screen = ui.max_rect();
+        theme::paint_ground(ui.painter(), screen, &p);
+        self.paint_grain(ui, screen, &p);
 
-        // Age out toasts.
+        // Age out toasts. They float now rather than sitting in a status bar,
+        // so they need frames of their own to fade on time.
         let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
         for t in self.toasts.iter_mut() {
             t.ttl -= dt;
         }
         self.toasts.retain(|t| t.ttl > 0.0);
+        if !self.toasts.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
 
         // Files dropped onto the window.
         let dropped: Vec<PathBuf> = ctx.input(|i| {
@@ -2189,44 +2399,48 @@ impl eframe::App for App {
         }
 
         // Panel order is layout order: egui hands each panel the rect the
-        // previous ones left behind. The menu spans the window, then the three
-        // left columns and the right dock claim full height, and only then do
-        // the toolbar and tab strip run across what remains — which is what
-        // puts them over the document rather than over the whole window.
-        self.menu_bar(ui, &p);
+        // previous ones left behind. The title bar spans the window, the
+        // islands claim full height down each side, and the canvas well takes
+        // what remains between them.
+        self.title_bar(ui, &p);
 
         if !self.home.visible {
-            self.tool_rail(ui, &p);
-            self.nav_sidebar(ui, &p);
+            self.tool_dock(ui, &p);
         }
         self.side_panel(ui, &p);
         self.dock_panel(ui, &p);
 
-        // The toolbar acts on a document, so on home it would be a full row of
-        // greyed-out controls. The menu bar still covers everything reachable
-        // without one.
-        if self.prefs.show_toolbar && !self.home.visible {
-            self.toolbar(ui, &p);
-        }
-        self.tab_strip(ui, &p);
-        if self.prefs.show_status_bar {
-            self.status_bar(ui, &p);
-        }
-
+        let docked = !self.home.visible && self.dock_open && self.tab().is_some();
+        let well = if self.home.visible {
+            // Home draws its own islands inside this space.
+            egui::Frame::new().outer_margin(egui::Margin {
+                left: GAP_I,
+                right: GAP_I,
+                top: 0,
+                bottom: GAP_I,
+            })
+        } else {
+            egui::Frame::new()
+                .fill(p.canvas)
+                .stroke(egui::Stroke::new(1.0, p.wash(0x0a)))
+                .corner_radius(egui::CornerRadius::same(theme::RADIUS_ISLAND))
+                .outer_margin(egui::Margin {
+                    left: HALF_I,
+                    right: if docked { HALF_I } else { GAP_I },
+                    top: 0,
+                    bottom: GAP_I,
+                })
+        };
 
         // Set by the home screen's action cards; dispatched once the central
         // panel has given back its borrow on `self`.
         let mut home_command: Option<Command> = None;
+        let mut work_area = None;
         let action = egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(p.canvas)
-                    .stroke(egui::Stroke::new(1.0, p.border))
-                    .corner_radius(egui::CornerRadius::same(theme::RADIUS_GLASS))
-                    .outer_margin(egui::Margin::same(theme::GLASS_INSET)),
-            )
+            .frame(well)
             .show(ui, |ui| {
                 if self.home.visible {
+                    work_area = Some(ui.max_rect());
                     match crate::home::show(ui, &p, &mut self.home, &self.prefs) {
                         crate::home::Action::None => {}
                         // Queued rather than opened here: `open_path` needs
@@ -2237,13 +2451,34 @@ impl eframe::App for App {
                     }
                     return ViewerAction::None;
                 }
+
+                let content = ui.max_rect();
+                if self.prefs.show_toolbar {
+                    self.canvas_header(ui, &p, ctx);
+                }
+                work_area = Some(ui.available_rect_before_wrap());
+
                 let index = self.active;
                 let (service, textures, prefs, tool) =
                     (&self.service, &mut self.textures, &self.prefs, self.tool);
-                match self.tabs.get_mut(index) {
+                let action = match self.tabs.get_mut(index) {
                     Some(tab) => viewer::show(ui, &p, tab, service, textures, prefs, tool),
                     None => ViewerAction::None,
-                }
+                };
+
+                // egui clips to rectangles, so whatever the pages left in the
+                // corners of the well is rounded off here, and the well's edge
+                // redrawn over the top.
+                let radius = theme::RADIUS_ISLAND as f32;
+                inset_shade(ui.painter(), content, &p);
+                theme::mask_corners(ui.painter(), content, radius - 1.0, p.ground);
+                ui.ctx().layer_painter(ui.layer_id()).rect_stroke(
+                    content.expand(1.0),
+                    egui::CornerRadius::same(theme::RADIUS_ISLAND),
+                    egui::Stroke::new(1.0, p.wash(0x0a)),
+                    egui::StrokeKind::Inside,
+                );
+                action
             })
             .inner;
         self.handle_viewer_action(action, ctx);
@@ -2255,6 +2490,15 @@ impl eframe::App for App {
         let queued = std::mem::take(&mut self.startup_files);
         for f in queued {
             self.open_path(&f, None);
+        }
+
+        if let Some(area) = work_area {
+            // `show_status_bar` is the old name for this: the capsule is what
+            // the status bar's page readout became.
+            if !self.home.visible && self.prefs.show_status_bar {
+                self.page_capsule(ctx, &p, area);
+            }
+            self.toasts_overlay(ctx, &p, area);
         }
 
         self.command_palette(ctx, &p);
@@ -2288,23 +2532,27 @@ impl eframe::App for App {
 }
 
 
-/// The tools the rail offers, in order.
+/// The tools the dock offers, in groups.
 ///
-/// Not every tool Quark has — the rail is for the ones reached constantly while
+/// Not every tool Quark has — the dock is for the ones reached constantly while
 /// reading and marking up. The rest stay in the Tools menu and the command
-/// palette, because a rail of thirty icons is a menu that pretends to be a
+/// palette, because a dock of thirty icons is a menu that pretends to be a
 /// toolbar.
-const TOOL_RAIL: [(Tool, Icon, &str); 7] = [
-    (Tool::Select, Icon::Cursor, "Select"),
-    (Tool::Pan, Icon::Hand, "Pan"),
-    (Tool::Highlight, Icon::Highlight, "Highlight"),
-    (Tool::Note, Icon::Note, "Note"),
-    (Tool::Ink, Icon::Pen, "Draw"),
-    (Tool::Rectangle, Icon::Square, "Shapes"),
-    (Tool::Redact, Icon::Redact, "Redact"),
+const TOOL_GROUPS: [&[(Tool, Icon, &str)]; 3] = [
+    &[
+        (Tool::Select, Icon::Cursor, "Select (V)"),
+        (Tool::Pan, Icon::Hand, "Pan (H)"),
+    ],
+    &[
+        (Tool::Highlight, Icon::Highlight, "Highlight (Ctrl+Shift+H)"),
+        (Tool::Note, Icon::Note, "Sticky note (Ctrl+Shift+M)"),
+        (Tool::Ink, Icon::Pen, "Draw (Ctrl+Shift+D)"),
+        (Tool::Rectangle, Icon::Shapes, "Shapes"),
+    ],
+    &[(Tool::Redact, Icon::Redact, "Redact")],
 ];
 
-/// The structural panels the nav sidebar switches between.
+/// The structural panels the pages island switches between.
 ///
 /// Comments is deliberately absent: it lives in the right dock with the
 /// assistant, because both are a conversation about the document rather than a
@@ -2317,10 +2565,397 @@ const NAV_PANELS: [(SidePanel, Icon, &str); 5] = [
     (SidePanel::Layers, Icon::Layers, "Layers"),
 ];
 
+/// Width of the command search field in the title bar.
+const SEARCH_WIDTH: f32 = 300.0;
 
-/// Width reserved for the toolbar's centred group.
+/// The island gap, and half of it, as the integer margins frames take.
 ///
-/// Fixed rather than measured: the group is placed at an explicit rect so it
-/// stays on the bar's centre line no matter how long the filename on the left
-/// or the icon set on the right becomes.
-const CENTRE_GROUP_WIDTH: f32 = 420.0;
+/// Neighbouring islands each take half the gap, so the space between two of
+/// them is a whole gap — the same as between an island and the window edge.
+const GAP_I: i8 = theme::GAP as i8;
+const HALF_I: i8 = (theme::GAP / 2.0) as i8;
+
+/// A panel frame that only spaces: the island itself is painted by
+/// [`paint_island`].
+fn island_frame(inner: i8, outer: egui::Margin) -> egui::Frame {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::same(inner))
+        .outer_margin(outer)
+}
+
+/// Paints the island behind a panel's contents.
+///
+/// Not the panel frame's own fill and shadow: egui clips a panel to its rect,
+/// margin included, so a frame shadow would be cut off with a hard edge a few
+/// pixels outside the island. Painting through the layer's unclipped painter
+/// lets the shadow fall softly into the gap.
+fn paint_island(ui: &egui::Ui, inner: f32, p: &Palette) {
+    let painter = ui.ctx().layer_painter(ui.layer_id());
+    theme::paint_island(&painter, ui.max_rect().expand(inner), p);
+}
+
+/// The short rule between groups in the tool dock.
+fn dock_rule(ui: &mut egui::Ui, p: &Palette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 9.0), egui::Sense::hover());
+    ui.painter().rect_filled(
+        egui::Rect::from_center_size(rect.center(), egui::vec2(20.0, 1.0)),
+        egui::CornerRadius::same(1),
+        p.wash(0x16),
+    );
+}
+
+/// A one-pixel rule across a popover.
+fn hairline(ui: &mut egui::Ui, p: &Palette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 9.0), egui::Sense::hover());
+    ui.painter().rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 6.0, rect.center().y - 0.5),
+            egui::pos2(rect.right() - 6.0, rect.center().y + 0.5),
+        ),
+        egui::CornerRadius::same(1),
+        p.wash(0x10),
+    );
+}
+
+/// The command search field in the title bar.
+///
+/// It is a button: clicking it opens the palette, which is where typing
+/// actually happens. A real field here would be a second, lesser palette.
+fn command_search(ui: &mut egui::Ui, p: &Palette) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(SEARCH_WIDTH, 36.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let radius = egui::CornerRadius::same(theme::RADIUS_CONTROL);
+        let hovered = response.hovered();
+        painter.rect_filled(rect, radius, p.wash(if hovered { 0x10 } else { 0x09 }));
+        painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
+        icons::draw(
+            painter,
+            egui::Rect::from_center_size(rect.left_center() + egui::vec2(20.0, 0.0), egui::Vec2::splat(16.0)),
+            Icon::Search,
+            p.text_faint,
+        );
+        painter.text(
+            rect.left_center() + egui::vec2(38.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            "Search or run a command",
+            theme::body(12.5),
+            if hovered { p.text_muted } else { p.text_faint },
+        );
+        widgets::paint_keys(painter, rect.right() - 8.0, rect.center().y, "Ctrl+Shift+P", p);
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// What a click on a title-bar tab asked for.
+struct TabHit {
+    clicked: bool,
+    close: bool,
+}
+
+/// One tab in the title bar. The active one is raised out of the bar on a
+/// soft shadow, the way a selected segment is.
+fn title_tab(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    icon: Icon,
+    label: &str,
+    active: bool,
+    dirty: bool,
+    closable: bool,
+) -> TabHit {
+    let font = if active { theme::strong(12.5) } else { theme::body(12.5) };
+    let colour = if active { p.text } else { p.text_muted };
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, colour);
+    let text_width = galley.size().x;
+    let mut width = 36.0 + text_width + 12.0;
+    if dirty {
+        width += 12.0;
+    }
+    if closable {
+        width += 18.0;
+    }
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 36.0), egui::Sense::click());
+    let close_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 17.0, rect.center().y),
+        egui::Vec2::splat(22.0),
+    );
+    // Registered after the tab, so it sits on top and takes its own clicks.
+    let close = closable.then(|| ui.interact(close_rect, response.id.with("close"), egui::Sense::click()));
+    let close_hovered = close.as_ref().is_some_and(|c| c.hovered());
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let radius = egui::CornerRadius::same(theme::RADIUS_CONTROL);
+        if active {
+            painter.add(
+                egui::epaint::Shadow {
+                    offset: [0, 4],
+                    blur: 14,
+                    spread: 0,
+                    color: if p.is_dark() {
+                        egui::Color32::from_black_alpha(0x59)
+                    } else {
+                        egui::Color32::from_rgba_unmultiplied(0x2a, 0x1b, 0x50, 0x1a)
+                    },
+                }
+                .as_shape(rect, radius),
+            );
+            painter.rect(rect, radius, p.popover, egui::Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
+            theme::paint_sheen(painter, rect, theme::RADIUS_CONTROL as f32, p);
+        } else if response.hovered() || close_hovered {
+            painter.rect_filled(rect, radius, p.wash(0x0b));
+        }
+        icons::draw(
+            painter,
+            egui::Rect::from_center_size(rect.left_center() + egui::vec2(20.0, 0.0), egui::Vec2::splat(15.0)),
+            icon,
+            if active { p.accent_text } else { p.text_muted },
+        );
+        let text_left = rect.left() + 36.0;
+        painter.galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, colour);
+        if dirty {
+            painter.circle_filled(egui::pos2(text_left + text_width + 9.0, rect.center().y), 3.0, p.accent);
+        }
+        if let Some(c) = &close {
+            if c.hovered() {
+                painter.rect_filled(close_rect, egui::CornerRadius::same(8), p.wash(0x14));
+            }
+            if active || response.hovered() || c.hovered() {
+                icons::draw(
+                    painter,
+                    egui::Rect::from_center_size(close_rect.center(), egui::Vec2::splat(12.0)),
+                    Icon::Close,
+                    if c.hovered() { p.text } else { p.text_faint },
+                );
+            }
+        }
+    }
+
+    // Middle-click closes, as it does in every tabbed application.
+    let close_clicked =
+        close.as_ref().is_some_and(|c| c.clicked()) || (closable && response.middle_clicked());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    TabHit {
+        clicked: response.clicked() && !close_clicked,
+        close: close_clicked,
+    }
+}
+
+/// The zoom readout in the capsule, which opens the zoom menu.
+fn zoom_button(ui: &mut egui::Ui, p: &Palette, label: &str) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::strong(13.0), p.text);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(galley.size().x + 32.0, 32.0),
+        egui::Sense::click(),
+    );
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if response.hovered() {
+            painter.rect_filled(rect, egui::CornerRadius::same(11), p.wash(0x0d));
+        }
+        painter.galley(
+            egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0),
+            galley,
+            p.text,
+        );
+        icons::draw(
+            painter,
+            egui::Rect::from_center_size(rect.right_center() - egui::vec2(12.0, 0.0), egui::Vec2::splat(11.0)),
+            Icon::ChevronDown,
+            p.text_faint,
+        );
+    }
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Zoom")
+}
+
+/// One floating message.
+fn toast(ui: &mut egui::Ui, p: &Palette, text: &str, error: bool, ttl: f32) {
+    // The last moment of a toast's life is a fade rather than a blink.
+    ui.set_opacity((ttl / 0.4).clamp(0.0, 1.0));
+    let colour = if error { p.error } else { p.success };
+    egui::Frame::new()
+        .fill(p.popover)
+        .stroke(egui::Stroke::new(
+            1.0,
+            if error {
+                egui::Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), 0x40)
+            } else {
+                p.border
+            },
+        ))
+        .corner_radius(egui::CornerRadius::same(13))
+        .inner_margin(egui::Margin { left: 10, right: 14, top: 8, bottom: 8 })
+        .shadow(theme::float_shadow(p))
+        .show(ui, |ui| {
+            ui.set_max_width(380.0);
+            ui.horizontal(|ui| {
+                let (plate, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                ui.painter().circle_filled(
+                    plate.center(),
+                    10.0,
+                    egui::Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), 0x2a),
+                );
+                icons::draw(
+                    ui.painter(),
+                    egui::Rect::from_center_size(plate.center(), egui::Vec2::splat(12.0)),
+                    if error { Icon::Warning } else { Icon::Check },
+                    colour,
+                );
+                ui.add(egui::Label::new(RichText::new(text).font(theme::strong(12.0)).color(p.text)).wrap());
+            });
+        });
+}
+
+/// The send button in a composer: a solid accent square once there is
+/// something to send.
+fn send_button(ui: &mut egui::Ui, p: &Palette, enabled: bool) -> egui::Response {
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(34.0), sense);
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let radius = egui::CornerRadius::same(12);
+        if enabled {
+            painter.add(
+                egui::epaint::Shadow {
+                    offset: [0, 6],
+                    blur: 16,
+                    spread: 0,
+                    color: p.accent_alpha(0x40),
+                }
+                .as_shape(rect, radius),
+            );
+            let fill = if response.hovered() {
+                theme::composite(egui::Color32::from_white_alpha(0x1a), p.accent)
+            } else {
+                p.accent
+            };
+            painter.rect_filled(rect, radius, fill);
+        } else {
+            painter.rect_filled(rect, radius, p.wash(0x0d));
+        }
+        icons::draw(
+            painter,
+            egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(16.0)),
+            Icon::ArrowUp,
+            if enabled { p.on_accent } else { p.text_disabled },
+        );
+    }
+    if enabled {
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Send")
+    } else {
+        response
+    }
+}
+
+/// A command label with the part the query matched set in bold.
+fn highlighted(
+    label: &str,
+    query: &str,
+    colour: egui::Color32,
+    strong: egui::Color32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let format = |font: egui::FontId, color: egui::Color32| egui::TextFormat {
+        font_id: font,
+        color,
+        ..Default::default()
+    };
+    // Byte offsets found in the lowercased label only line up with the
+    // original for ASCII; anything else is shown whole rather than mis-cut.
+    let at = if !query.is_empty() && label.is_ascii() {
+        label.to_lowercase().find(query)
+    } else {
+        None
+    };
+    match at {
+        Some(i) => {
+            let end = i + query.len();
+            job.append(&label[..i], 0.0, format(theme::body(13.0), colour));
+            job.append(&label[i..end], 0.0, format(theme::heavy(13.0), strong));
+            job.append(&label[end..], 0.0, format(theme::body(13.0), colour));
+        }
+        None => job.append(label, 0.0, format(theme::body(13.0), colour)),
+    }
+    job
+}
+
+/// A folder, with the home directory written as `~`.
+fn tilde(dir: &std::path::Path) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(rest) = dir.strip_prefix(&home) {
+            return if rest.as_os_str().is_empty() {
+                "~".into()
+            } else {
+                format!("~/{}", rest.display())
+            };
+        }
+    }
+    dir.display().to_string()
+}
+
+/// The shade just inside the top of the canvas well, which is what makes it
+/// read as recessed rather than as a darker panel.
+fn inset_shade(painter: &egui::Painter, well: egui::Rect, p: &Palette) {
+    let depth = 14.0;
+    let shade = if p.is_dark() {
+        egui::Color32::from_black_alpha(0x66)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(0x2a, 0x1b, 0x50, 0x14)
+    };
+    let mut mesh = egui::Mesh::default();
+    let top = well.top();
+    mesh.colored_vertex(egui::pos2(well.left(), top), shade);
+    mesh.colored_vertex(egui::pos2(well.right(), top), shade);
+    mesh.colored_vertex(egui::pos2(well.right(), top + depth), egui::Color32::TRANSPARENT);
+    mesh.colored_vertex(egui::pos2(well.left(), top + depth), egui::Color32::TRANSPARENT);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::*;
+
+    #[test]
+    fn a_query_is_highlighted_where_it_matches() {
+        let job = highlighted("Rotate Pages Clockwise", "pages", egui::Color32::GRAY, egui::Color32::WHITE);
+        assert_eq!(job.sections.len(), 3);
+        let range = &job.sections[1].byte_range;
+        assert_eq!(&job.text[range.start.0..range.end.0], "Pages");
+    }
+
+    #[test]
+    fn a_non_ascii_label_is_never_cut_mid_character() {
+        let job = highlighted("Größe ändern", "ä", egui::Color32::GRAY, egui::Color32::WHITE);
+        assert_eq!(job.sections.len(), 1);
+    }
+
+    #[test]
+    fn the_home_directory_is_written_as_a_tilde() {
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(tilde(&home.join("Documents")), "~/Documents");
+            assert_eq!(tilde(&home), "~");
+        }
+        assert_eq!(tilde(std::path::Path::new("/tmp")), "/tmp");
+    }
+
+    #[test]
+    fn neighbouring_islands_share_one_gap() {
+        assert_eq!(HALF_I * 2, GAP_I);
+    }
+
+    #[test]
+    fn every_tool_in_the_dock_is_reachable_once() {
+        let tools: Vec<Tool> = TOOL_GROUPS.iter().flat_map(|g| g.iter().map(|t| t.0)).collect();
+        for (i, a) in tools.iter().enumerate() {
+            assert!(!tools[i + 1..].contains(a), "{a:?} appears twice");
+        }
+    }
+}

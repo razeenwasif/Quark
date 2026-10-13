@@ -4,7 +4,7 @@ use egui::{Color32, CornerRadius, RichText, Sense, Stroke, Ui, vec2};
 use quark_core::annot::AnnotId;
 use quark_core::prefs::{Prefs, SidePanel};
 use quark_pdf::service::{PdfService, Request};
-use quark_ui::theme::Palette;
+use quark_ui::theme::{self, Palette};
 use quark_ui::widgets;
 
 use crate::tab::Tab;
@@ -70,13 +70,19 @@ fn thumbnails(
     textures: &mut TextureCache,
     prefs: &Prefs,
 ) -> PanelAction {
-    widgets::panel_header(ui, p, "Page Thumbnails");
+    ui.horizontal(|ui| {
+        ui.add_space(6.0);
+        ui.label(RichText::new("Pages").font(theme::strong(13.0)).color(p.text));
+        widgets::badge(ui, p, &tab.page_count().to_string(), false);
+    });
+    ui.add_space(6.0);
     let mut action = PanelAction::None;
 
     let width = ui.available_width();
     // Thumbnails are laid out at a fixed aspect so the list scrolls smoothly;
-    // the real page aspect is applied when the image arrives.
-    let thumb_w = (width - 24.0).clamp(60.0, 200.0);
+    // the real page aspect is applied when the image arrives. Narrower than
+    // the island, so each page floats with room round it.
+    let thumb_w = (width * 0.6).clamp(60.0, 200.0);
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -91,7 +97,7 @@ fn thumbnails(
                 let thumb_h = (thumb_w * aspect).clamp(40.0, 400.0);
 
                 let (rect, response) =
-                    ui.allocate_exact_size(vec2(width, thumb_h + 24.0), Sense::click_and_drag());
+                    ui.allocate_exact_size(vec2(width, thumb_h + 38.0), Sense::click_and_drag());
 
                 if ui.is_rect_visible(rect) {
                     let selected = tab.selected_pages.contains(&page);
@@ -99,17 +105,33 @@ fn thumbnails(
                     let painter = ui.painter();
 
                     let img_rect = egui::Rect::from_center_size(
-                        egui::pos2(rect.center().x, rect.top() + thumb_h / 2.0 + 4.0),
+                        egui::pos2(rect.center().x, rect.top() + thumb_h / 2.0 + 8.0),
                         vec2(thumb_w, thumb_h),
                     );
+                    let radius = CornerRadius::same(theme::RADIUS_THUMB);
 
-                    if selected || current {
+                    if selected && !current {
                         painter.rect_filled(
-                            img_rect.expand(4.0),
-                            CornerRadius::same(4),
-                            if selected { p.accent_soft } else { p.card_hover },
+                            img_rect.expand(6.0),
+                            CornerRadius::same(theme::RADIUS_THUMB + 5),
+                            p.accent_soft,
                         );
                     }
+                    // The current page glows faintly in the accent; the rest
+                    // just float on a soft shadow.
+                    painter.add(
+                        egui::epaint::Shadow {
+                            offset: [0, 6],
+                            blur: if current { 22 } else { 16 },
+                            spread: 0,
+                            color: if current {
+                                p.accent_alpha(0x40)
+                            } else {
+                                p.page_shadow.gamma_multiply(0.7)
+                            },
+                        }
+                        .as_shape(img_rect, radius),
+                    );
 
                     // Thumbnails are cached under a page key at their own
                     // scale, so they never collide with the main view's
@@ -118,18 +140,19 @@ fn thumbnails(
                     let key = PageKey::new(page, scale, quark_core::geom::Rot::D0, prefs.tint);
                     match textures.get(&key) {
                         Some(tex) => {
-                            painter.image(
-                                tex.id(),
-                                img_rect,
-                                egui::Rect::from_min_max(
-                                    egui::pos2(0.0, 0.0),
-                                    egui::pos2(1.0, 1.0),
-                                ),
-                                Color32::WHITE,
+                            painter.add(
+                                egui::epaint::RectShape::filled(img_rect, radius, Color32::WHITE)
+                                    .with_texture(
+                                        tex.id(),
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                    ),
                             );
                         }
                         None => {
-                            painter.rect_filled(img_rect, CornerRadius::same(2), Color32::WHITE);
+                            painter.rect_filled(img_rect, radius, Color32::WHITE);
                             if textures.mark_pending(key, 0) {
                                 service.send(Request::Thumbnail {
                                     id: tab.id,
@@ -142,23 +165,42 @@ fn thumbnails(
                         }
                     }
 
-                    painter.rect_stroke(
-                        img_rect,
-                        CornerRadius::same(2),
-                        Stroke::new(
-                            if current { 1.5 } else { 1.0 },
-                            if current { p.accent } else { p.page_border },
-                        ),
-                        egui::StrokeKind::Outside,
-                    );
+                    if current {
+                        // A ring outside a gap, so it never touches the page.
+                        painter.rect_stroke(
+                            img_rect.expand(4.0),
+                            CornerRadius::same(theme::RADIUS_THUMB + 4),
+                            Stroke::new(2.0, p.accent),
+                            egui::StrokeKind::Middle,
+                        );
+                    } else if !p.is_dark() {
+                        painter.rect_stroke(
+                            img_rect,
+                            radius,
+                            Stroke::new(1.0, p.page_border),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
 
-                    painter.text(
-                        egui::pos2(rect.center().x, rect.bottom() - 9.0),
-                        egui::Align2::CENTER_CENTER,
-                        tab.info.page_label(page),
-                        egui::FontId::proportional(10.0),
-                        if current { p.accent_text } else { p.text_muted },
-                    );
+                    let label = tab.info.page_label(page);
+                    let centre = egui::pos2(rect.center().x, rect.bottom() - 12.0);
+                    if current {
+                        let galley = painter.layout_no_wrap(label, theme::strong(11.0), p.accent_text);
+                        let pill = egui::Rect::from_center_size(
+                            centre,
+                            vec2(galley.size().x.max(8.0) + 14.0, 20.0),
+                        );
+                        painter.rect_filled(pill, CornerRadius::same(8), p.accent_soft);
+                        painter.galley(pill.center() - galley.size() / 2.0, galley, p.accent_text);
+                    } else {
+                        painter.text(
+                            centre,
+                            egui::Align2::CENTER_CENTER,
+                            label,
+                            theme::strong(11.0),
+                            p.text_faint,
+                        );
+                    }
                 }
 
                 if response.clicked() {
@@ -294,15 +336,22 @@ fn bookmarks(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
 }
 
 fn comments(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
-    widgets::panel_header(ui, p, "Comments");
     let all = tab.all_annotations();
     if all.is_empty() {
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("No comments yet. Use the markup tools to add one.")
-                .color(p.text_faint)
-                .size(12.0),
-        );
+        ui.add_space(18.0);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                RichText::new("No comments yet")
+                    .font(theme::strong(13.0))
+                    .color(p.text_muted),
+            );
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("Use the markup tools to add one.")
+                    .font(theme::body(12.0))
+                    .color(p.text_faint),
+            );
+        });
         return PanelAction::None;
     }
 
@@ -312,56 +361,74 @@ fn comments(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
         .show(ui, |ui| {
             for ann in all {
                 let selected = tab.selected_annotation == Some(ann.id);
-                let frame = egui::Frame::new()
-                    .fill(if selected { p.accent_soft } else { Color32::TRANSPARENT })
-                    .stroke(Stroke::new(1.0, if selected { p.accent } else { p.border }))
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(egui::Margin::same(7));
+                let frame = theme::card(p)
+                    .fill(if selected { p.wash(0x10) } else { p.wash(0x08) })
+                    .stroke(Stroke::new(
+                        1.0,
+                        if selected { p.accent_alpha(0x80) } else { p.wash(0x0a) },
+                    ));
 
                 let r = frame.show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 8.0;
                     ui.horizontal(|ui| {
-                        // A swatch of the annotation's own colour, so the list
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        // A dot of the annotation's own colour, so the list
                         // maps onto the page at a glance.
-                        let (sw, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
-                        ui.painter().rect_filled(
-                            sw,
-                            CornerRadius::same(2),
+                        let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                        ui.painter().circle_filled(
+                            dot.center(),
+                            5.0,
                             Color32::from_rgb(ann.color.r, ann.color.g, ann.color.b),
                         );
                         ui.label(
                             RichText::new(ann.kind.subtype_name())
-                                .size(10.0)
+                                .font(theme::strong(12.0))
+                                .color(p.text),
+                        );
+                        ui.label(
+                            RichText::new(format!("· p. {}", ann.page + 1))
+                                .font(theme::body(12.0))
                                 .color(p.text_faint),
                         );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(format!("p. {}", ann.page + 1))
-                                    .size(10.0)
-                                    .color(p.text_faint),
-                            );
-                        });
                     });
 
                     if !ann.subject.trim().is_empty() {
-                        ui.label(
-                            RichText::new(format!("“{}”", widgets::elide(&ann.subject, 70, false)))
-                                .size(11.0)
-                                .italics()
-                                .color(p.text_muted),
-                        );
+                        egui::Frame::new()
+                            .fill(p.recess)
+                            .corner_radius(CornerRadius::same(11))
+                            .inner_margin(egui::Margin::symmetric(10, 7))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(
+                                    RichText::new(format!(
+                                        "“{}”",
+                                        widgets::elide(&ann.subject, 90, false)
+                                    ))
+                                    .font(theme::body(11.5))
+                                    .italics()
+                                    .color(p.text_muted),
+                                );
+                            });
                     }
                     let body = ann.summary();
                     if !body.is_empty() {
-                        ui.label(RichText::new(body).size(12.0).color(p.text));
+                        ui.label(RichText::new(body).font(theme::body(12.5)).color(p.text));
                     }
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(&ann.author).size(10.0).color(p.text_faint),
-                        );
+                        ui.spacing_mut().item_spacing.x = 7.0;
+                        if !ann.author.trim().is_empty() {
+                            widgets::avatar(ui, p, &ann.author);
+                            ui.label(
+                                RichText::new(&ann.author)
+                                    .font(theme::body(11.5))
+                                    .color(p.text_muted),
+                            );
+                        }
                         if ann.thread_len() > 1 {
                             ui.label(
                                 RichText::new(format!("{} replies", ann.replies.len()))
-                                    .size(10.0)
+                                    .font(theme::strong(11.5))
                                     .color(p.accent_text),
                             );
                         }
@@ -378,7 +445,7 @@ fn comments(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
                         ui.close();
                     }
                 });
-                ui.add_space(4.0);
+                ui.add_space(8.0);
             }
         });
     action

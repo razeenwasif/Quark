@@ -118,8 +118,8 @@ impl Default for Prefs {
             zoom: ZoomMode::FitWidth,
             tint: PageTint::None,
             side_panel: SidePanel::Thumbnails,
-            side_panel_width: 240.0,
-            dock_width: 266.0,
+            side_panel_width: 258.0,
+            dock_width: 330.0,
             // Local by default: the first question a user asks must not
             // silently ship their document to a third party.
             ai_backend: "ollama".into(),

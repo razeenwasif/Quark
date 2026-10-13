@@ -18,30 +18,32 @@
 
 use std::path::PathBuf;
 
-use egui::{Align2, FontId, Rect, Sense, Ui, vec2};
+use egui::{Align2, Rect, Sense, Ui, UiBuilder, vec2};
 use quark_core::command::Command;
 use quark_core::prefs::Prefs;
 use quark_ui::icons::{self, Icon};
 use quark_ui::theme::{self, Palette};
 use quark_ui::widgets;
 
-/// Width of the navigation rail.
-const RAIL_WIDTH: f32 = 176.0;
+/// Width of the navigation island.
+const NAV_WIDTH: f32 = 248.0;
 /// Height of one recent-file row.
-const ROW_HEIGHT: f32 = 46.0;
+const ROW_HEIGHT: f32 = 60.0;
 /// Widest the content column is allowed to get.
 ///
 /// Without a cap the recent list stretches to the window, which on a wide
 /// monitor strands the date and size a thousand pixels from the filename they
 /// describe. Every file manager caps this for the same reason.
-const MAX_CONTENT: f32 = 940.0;
-/// Where the filename column starts, clearing the row's file icon.
-const NAME_LEFT: f32 = 42.0;
+const MAX_CONTENT: f32 = 1040.0;
+/// Where the filename column starts, clearing the row's paper thumbnail.
+const NAME_LEFT: f32 = 66.0;
 /// Room reserved for the widest column heading ("LAST OPENED" in micro-caps,
 /// which is wider than any date that sits under it).
 const HEADER_WIDTH: f32 = 88.0;
-/// Size of a quick-action card.
-const CARD: egui::Vec2 = egui::vec2(168.0, 92.0);
+/// Height of a quick-action card; the width is a quarter of the column.
+const CARD_HEIGHT: f32 = 124.0;
+/// Height of the drop hint at the foot of the nav.
+const DROP_HEIGHT: f32 = 160.0;
 
 /// Which part of the home screen the rail has selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -209,7 +211,7 @@ const QUICK_ACTIONS: [(Icon, &str, &str, Command); 4] = [
         Command::NewFromBlank,
     ),
     (
-        Icon::Grid,
+        Icon::Image,
         "From images",
         "Build a PDF from pictures",
         Command::NewFromImages,
@@ -223,91 +225,134 @@ const QUICK_ACTIONS: [(Icon, &str, &str, Command); 4] = [
 ];
 
 /// Draws the home screen and reports what the user asked for.
+///
+/// Two islands side by side, the same shape as the document view: the
+/// sections on the left, the selected section on the right.
 pub(crate) fn show(ui: &mut Ui, p: &Palette, state: &mut HomeState, prefs: &Prefs) -> Action {
     state.sync(prefs);
 
-    let mut action = Action::None;
-    ui.horizontal_top(|ui| {
-        rail(ui, p, state);
-        ui.add_space(10.0);
-        ui.vertical(|ui| {
-            action = body(ui, p, state);
-        });
-    });
-    action
+    let full = ui.available_rect_before_wrap();
+    ui.allocate_rect(full, Sense::hover());
+    let nav_rect = Rect::from_min_size(full.min, vec2(NAV_WIDTH, full.height()));
+    let body_rect = Rect::from_min_max(
+        egui::pos2(nav_rect.right() + theme::GAP, full.top()),
+        full.max,
+    );
+
+    // Painted through the layer's unclipped painter rather than as frames:
+    // the central panel clips to its rect, which would cut the islands'
+    // shadows off a few pixels below them.
+    let painter = ui.ctx().layer_painter(ui.layer_id());
+    theme::paint_island(&painter, nav_rect, p);
+    theme::paint_island(&painter, body_rect, p);
+
+    let mut nav_ui = ui.new_child(UiBuilder::new().max_rect(nav_rect.shrink2(vec2(10.0, 14.0))));
+    nav(&mut nav_ui, p, state);
+
+    let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body_rect.shrink2(vec2(44.0, 36.0))));
+    body(&mut body_ui, p, state)
 }
 
-/// The navigation rail: the brand, then the sections.
-fn rail(ui: &mut Ui, p: &Palette, state: &mut HomeState) {
+/// The sections, and the drop hint at the foot.
+fn nav(ui: &mut Ui, p: &Palette, state: &mut HomeState) {
     let height = ui.available_height();
-    ui.allocate_ui_with_layout(
-        vec2(RAIL_WIDTH, height),
-        egui::Layout::top_down(egui::Align::Min),
+    let top = ui.cursor().top();
+    ui.spacing_mut().item_spacing.y = 4.0;
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(widgets::micro_caps("Library"))
+                .font(theme::strong(10.5))
+                .color(p.text_faint),
+        );
+    });
+    ui.add_space(4.0);
+
+    let recent = state.entries.len();
+    for (section, label, icon, count) in [
+        (Section::Recent, "Recent", Icon::Clock, Some(recent).filter(|n| *n > 0)),
+        (Section::Tools, "Tools", Icon::Grid, None),
+    ] {
+        if widgets::nav_item(ui, p, icon, label, state.section == section, count).clicked() {
+            state.section = section;
+        }
+    }
+
+    // The hint sits at the bottom, out of the way of the list but always
+    // visible — dropping a file is the fastest way in and is otherwise
+    // undiscoverable.
+    let used = ui.cursor().top() - top;
+    ui.add_space((height - used - DROP_HEIGHT).max(8.0));
+    drop_zone(ui, p);
+}
+
+/// The dashed well that says a PDF can be dropped anywhere.
+fn drop_zone(ui: &mut Ui, p: &Palette) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), DROP_HEIGHT), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter();
+    let radius = theme::RADIUS_CARD as f32 + 2.0;
+    painter.rect_filled(rect, egui::CornerRadius::same(radius as u8), p.recess);
+    painter.extend(egui::Shape::dashed_line(
+        &rounded_outline(rect.shrink(0.75), radius),
+        egui::Stroke::new(1.5, p.wash(0x22)),
+        6.0,
+        5.0,
+    ));
+
+    ui.scope_builder(
+        UiBuilder::new()
+            .max_rect(rect.shrink2(vec2(12.0, 20.0)))
+            .layout(egui::Layout::top_down(egui::Align::Center)),
         |ui| {
-            ui.set_min_width(RAIL_WIDTH);
-            ui.add_space(14.0);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            let (plate, _) = ui.allocate_exact_size(vec2(46.0, 46.0), Sense::hover());
+            let painter = ui.painter();
+            painter.circle_filled(plate.center(), 23.0, p.accent_soft);
+            icons::draw(
+                painter,
+                Rect::from_center_size(plate.center(), vec2(20.0, 20.0)),
+                Icon::Upload,
+                p.accent_text,
+            );
+            ui.label(
+                egui::RichText::new("Drop a PDF anywhere")
+                    .font(theme::strong(13.0))
+                    .color(p.text),
+            );
             ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Quark").size(20.0).color(p.accent_text));
-            });
-            ui.add_space(16.0);
-
-            for (section, label, icon) in [
-                (Section::Recent, "Recent", Icon::Thumbnails),
-                (Section::Tools, "Tools", Icon::Grid),
-            ] {
-                if rail_item(ui, p, label, icon, state.section == section).clicked() {
-                    state.section = section;
-                }
-            }
-
-            // The hint sits at the bottom of the rail, out of the way of the
-            // list but always visible — dropping a file is the fastest way in
-            // and is otherwise undiscoverable.
-            let used = ui.min_rect().height();
-            ui.add_space((height - used - 52.0).max(8.0));
-            ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("Drop a PDF anywhere\nor press Ctrl+O")
-                        .size(11.0)
-                        .color(p.text_faint),
-                );
+                // Centre the row by hand: a horizontal layout inside a
+                // centred column still packs from the left.
+                let width = 108.0;
+                ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+                ui.label(egui::RichText::new("or press").font(theme::body(11.5)).color(p.text_muted));
+                widgets::shortcut(ui, p, "Ctrl+O");
             });
         },
     );
 }
 
-/// One selectable entry in the rail.
-fn rail_item(ui: &mut Ui, p: &Palette, label: &str, icon: Icon, active: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(RAIL_WIDTH - 8.0, 34.0), Sense::click());
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        if active {
-            painter.rect_filled(
-                rect,
-                egui::CornerRadius::same(theme::RADIUS_CONTROL),
-                p.accent_soft,
-            );
-        } else if response.hovered() {
-            painter.rect_filled(
-                rect,
-                egui::CornerRadius::same(theme::RADIUS_CONTROL),
-                p.card_hover,
-            );
+/// Points round a rounded rectangle, for a dashed outline.
+fn rounded_outline(rect: Rect, radius: f32) -> Vec<egui::Pos2> {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let centres = [
+        (egui::pos2(rect.right() - r, rect.top() + r), -FRAC_PI_2),
+        (egui::pos2(rect.right() - r, rect.bottom() - r), 0.0),
+        (egui::pos2(rect.left() + r, rect.bottom() - r), FRAC_PI_2),
+        (egui::pos2(rect.left() + r, rect.top() + r), PI),
+    ];
+    let mut pts = vec![egui::pos2(rect.left() + r, rect.top())];
+    for (c, start) in centres {
+        for i in 0..=8 {
+            let a = start + FRAC_PI_2 * (i as f32 / 8.0);
+            pts.push(c + vec2(a.cos(), a.sin()) * r);
         }
-        let colour = if active { p.accent_text } else { p.text_muted };
-        let icon_rect = Rect::from_min_size(rect.left_top() + vec2(8.0, 8.0), vec2(18.0, 18.0));
-        icons::draw(painter, icon_rect, icon, colour);
-        painter.text(
-            rect.left_center() + vec2(34.0, 0.0),
-            Align2::LEFT_CENTER,
-            label,
-            FontId::proportional(13.0),
-            colour,
-        );
     }
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    pts.push(egui::pos2(rect.left() + r, rect.top()));
+    pts
 }
 
 /// The main column: heading, quick actions, then the selected section.
@@ -319,25 +364,26 @@ fn body(ui: &mut Ui, p: &Palette, state: &HomeState) -> Action {
             // Caps the whole column — heading, cards and list — in one place,
             // so they stay aligned with each other on any window width.
             ui.set_max_width(MAX_CONTENT.min(ui.available_width()));
-            ui.add_space(14.0);
-            ui.label(
-                egui::RichText::new(match state.section {
-                    Section::Recent => "Recent files",
-                    Section::Tools => "Tools",
-                })
-                .size(24.0)
-                .color(p.text),
-            );
-            ui.add_space(14.0);
+            let (title, subtitle) = match state.section {
+                Section::Recent => ("Recent files", "Pick up where you left off, or start something new."),
+                Section::Tools => ("Tools", "Start a new document here, or open one to edit, export and sign it."),
+            };
+            ui.label(egui::RichText::new(title).font(theme::heavy(28.0)).color(p.text));
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(subtitle).font(theme::body(13.5)).color(p.text_muted));
+            ui.add_space(24.0);
 
+            let gap = 14.0;
+            let width = ((ui.available_width() - gap * 3.0) / 4.0).floor().max(150.0);
             ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(gap, gap);
                 for (icon, title, subtitle, command) in QUICK_ACTIONS {
-                    if card(ui, p, icon, title, subtitle).clicked() {
+                    if card(ui, p, icon, title, subtitle, width).clicked() {
                         action = Action::Run(command);
                     }
                 }
             });
-            ui.add_space(20.0);
+            ui.add_space(28.0);
 
             match state.section {
                 Section::Recent => {
@@ -353,48 +399,44 @@ fn body(ui: &mut Ui, p: &Palette, state: &HomeState) -> Action {
 }
 
 /// A quick-action card.
-fn card(ui: &mut Ui, p: &Palette, icon: Icon, title: &str, subtitle: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(CARD, Sense::click());
+fn card(ui: &mut Ui, p: &Palette, icon: Icon, title: &str, subtitle: &str, width: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::click());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        let radius = egui::CornerRadius::same(theme::RADIUS_CARD);
-        painter.rect_filled(
-            rect,
-            radius,
-            if response.hovered() {
-                p.card_hover
-            } else {
-                p.card
-            },
-        );
+        let radius = egui::CornerRadius::same(18);
+        let hovered = response.hovered();
+        if hovered {
+            painter.add(theme::island_shadow(p).as_shape(rect, radius));
+        }
+        painter.rect_filled(rect, radius, p.wash(if hovered { 0x12 } else { 0x08 }));
         painter.rect_stroke(
             rect,
             radius,
-            egui::Stroke::new(
-                1.0,
-                if response.hovered() {
-                    p.accent
-                } else {
-                    p.border
-                },
-            ),
+            egui::Stroke::new(1.0, if hovered { p.accent_alpha(0x80) } else { p.wash(0x0c) }),
             egui::StrokeKind::Inside,
         );
+        theme::paint_sheen(painter, rect, 18.0, p);
 
-        let icon_rect = Rect::from_min_size(rect.left_top() + vec2(14.0, 14.0), vec2(22.0, 22.0));
-        icons::draw(painter, icon_rect, icon, p.accent_text);
+        let plate = Rect::from_min_size(rect.left_top() + vec2(18.0, 18.0), vec2(40.0, 40.0));
+        painter.rect_filled(plate, egui::CornerRadius::same(13), p.accent_soft);
+        icons::draw(
+            painter,
+            Rect::from_center_size(plate.center(), vec2(19.0, 19.0)),
+            icon,
+            p.accent_text,
+        );
         painter.text(
-            rect.left_top() + vec2(14.0, 48.0),
+            rect.left_bottom() + vec2(18.0, -38.0),
             Align2::LEFT_TOP,
             title,
-            FontId::proportional(13.0),
+            theme::strong(13.5),
             p.text,
         );
         painter.text(
-            rect.left_top() + vec2(14.0, 66.0),
+            rect.left_bottom() + vec2(18.0, -19.0),
             Align2::LEFT_TOP,
             subtitle,
-            FontId::proportional(11.0),
+            theme::body(12.0),
             p.text_muted,
         );
     }
@@ -407,8 +449,8 @@ fn recent_list(ui: &mut Ui, p: &Palette, state: &HomeState) -> Option<Action> {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("Nothing opened yet. Files you open will be listed here.")
-                .size(12.0)
-                .color(p.text_faint),
+                .font(theme::body(12.5))
+                .color(p.text_muted),
         );
         return None;
     }
@@ -417,13 +459,14 @@ fn recent_list(ui: &mut Ui, p: &Palette, state: &HomeState) -> Option<Action> {
     // Both metadata columns are right-aligned on an anchor measured in from
     // the right edge, and the heading uses the same anchor as its values — the
     // two must not drift apart or "LAST OPENED" runs into "SIZE".
-    let size_right = width - 14.0;
-    let opened_right = size_right - 84.0;
+    let size_right = width - 16.0;
+    let opened_right = size_right - 110.0;
     // The headings are wider than the values they sit over, so the name has to
     // clear the widest of the two.
     let name_width = opened_right - HEADER_WIDTH - NAME_LEFT;
 
     header_row(ui, p, width, opened_right, size_right);
+    ui.spacing_mut().item_spacing.y = 2.0;
 
     let mut action = None;
     for entry in &state.entries {
@@ -432,28 +475,17 @@ fn recent_list(ui: &mut Ui, p: &Palette, state: &HomeState) -> Option<Action> {
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             if response.hovered() && !missing {
-                painter.rect_filled(
-                    rect,
-                    egui::CornerRadius::same(theme::RADIUS_SMALL),
-                    p.card_hover,
-                );
+                painter.rect_filled(rect, egui::CornerRadius::same(theme::RADIUS_CARD), p.wash(0x0d));
             }
 
-            let icon_rect =
-                Rect::from_min_size(rect.left_top() + vec2(10.0, 13.0), vec2(20.0, 20.0));
-            icons::draw(
-                painter,
-                icon_rect,
-                Icon::Thumbnails,
-                if missing { p.text_faint } else { p.accent_text },
-            );
+            paper_thumb(painter, p, rect.left_top() + vec2(16.0, 9.0), missing);
 
-            let text_colour = if missing { p.text_faint } else { p.text };
+            let text_colour = if missing { p.text_muted } else { p.text };
             painter.text(
-                rect.left_top() + vec2(NAME_LEFT, 9.0),
+                rect.left_top() + vec2(NAME_LEFT, 12.0),
                 Align2::LEFT_TOP,
-                widgets::elide(&entry.name, (name_width / 7.0) as usize, true),
-                FontId::proportional(13.0),
+                widgets::elide(&entry.name, (name_width / 7.5) as usize, true),
+                theme::strong(13.5),
                 text_colour,
             );
             // The folder is the disambiguator: two documents called
@@ -466,26 +498,26 @@ fn recent_list(ui: &mut Ui, p: &Palette, state: &HomeState) -> Option<Action> {
                 entry.folder.clone()
             };
             painter.text(
-                rect.left_top() + vec2(NAME_LEFT, 27.0),
+                rect.left_top() + vec2(NAME_LEFT, 32.0),
                 Align2::LEFT_TOP,
                 widgets::elide(&subtitle, (name_width / 6.0) as usize, false),
-                FontId::proportional(11.0),
-                if missing { p.error } else { p.text_faint },
+                theme::body(11.5),
+                if missing { p.warning } else { p.text_faint },
             );
 
             painter.text(
-                rect.left_top() + vec2(opened_right, 15.0),
-                Align2::RIGHT_TOP,
+                egui::pos2(rect.left() + opened_right, rect.center().y),
+                Align2::RIGHT_CENTER,
                 &entry.opened,
-                FontId::proportional(11.0),
-                p.text_muted,
+                theme::body(12.5),
+                if missing { p.text_faint } else { p.text_muted },
             );
             painter.text(
-                rect.left_top() + vec2(size_right, 15.0),
-                Align2::RIGHT_TOP,
+                egui::pos2(rect.left() + size_right, rect.center().y),
+                Align2::RIGHT_CENTER,
                 entry.size.map(human_size).unwrap_or_else(|| "—".into()),
-                FontId::proportional(11.0),
-                p.text_muted,
+                theme::body(12.5),
+                if missing { p.text_faint } else { p.text_muted },
             );
         }
 
@@ -501,34 +533,71 @@ fn recent_list(ui: &mut Ui, p: &Palette, state: &HomeState) -> Option<Action> {
     action
 }
 
+/// A tiny sheet of paper standing in for a document in the recent list.
+fn paper_thumb(painter: &egui::Painter, p: &Palette, at: egui::Pos2, missing: bool) {
+    let rect = Rect::from_min_size(at, vec2(34.0, 42.0));
+    let radius = egui::CornerRadius::same(7);
+    if missing {
+        painter.extend(egui::Shape::dashed_line(
+            &rounded_outline(rect, 7.0),
+            egui::Stroke::new(1.5, p.wash(0x28)),
+            4.0,
+            3.0,
+        ));
+        icons::draw(
+            painter,
+            Rect::from_center_size(rect.center(), vec2(16.0, 16.0)),
+            Icon::Warning,
+            p.text_faint,
+        );
+        return;
+    }
+    painter.add(
+        egui::epaint::Shadow {
+            offset: [0, 4],
+            blur: 10,
+            spread: 0,
+            color: p.page_shadow.gamma_multiply(0.6),
+        }
+        .as_shape(rect, radius),
+    );
+    painter.rect_filled(rect, radius, egui::Color32::WHITE);
+    let ink = egui::Color32::from_rgb(0x2c, 0x28, 0x34);
+    let rule = egui::Color32::from_rgb(0xd6, 0xd2, 0xdd);
+    let bar = |y: f32, w: f32, h: f32, c: egui::Color32| {
+        painter.rect_filled(
+            Rect::from_min_size(rect.left_top() + vec2(6.0, y), vec2((rect.width() - 12.0) * w, h)),
+            egui::CornerRadius::same(1),
+            c,
+        );
+    };
+    bar(7.0, 0.7, 3.0, ink);
+    bar(13.0, 1.0, 2.0, rule);
+    bar(18.0, 1.0, 2.0, p.accent_alpha(0x70));
+    bar(23.0, 0.8, 2.0, rule);
+    bar(28.0, 1.0, 2.0, rule);
+}
+
 /// The column headings above the recent list.
 fn header_row(ui: &mut Ui, p: &Palette, width: f32, opened_right: f32, size_right: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
     let painter = ui.painter();
-    let font = FontId::proportional(10.0);
     for (x, label, align) in [
-        (NAME_LEFT, "Name", Align2::LEFT_TOP),
-        (opened_right, "Last opened", Align2::RIGHT_TOP),
-        (size_right, "Size", Align2::RIGHT_TOP),
+        (NAME_LEFT, "Name", Align2::LEFT_CENTER),
+        (opened_right, "Last opened", Align2::RIGHT_CENTER),
+        (size_right, "Size", Align2::RIGHT_CENTER),
     ] {
         painter.text(
-            rect.left_top() + vec2(x, 4.0),
+            egui::pos2(rect.left() + x, rect.center().y),
             align,
             widgets::micro_caps(label),
-            font.clone(),
+            theme::strong(10.5),
             p.text_faint,
         );
     }
-    painter.line_segment(
-        [
-            egui::pos2(rect.left() + 10.0, rect.bottom()),
-            egui::pos2(rect.right() - 10.0, rect.bottom()),
-        ],
-        egui::Stroke::new(1.0, p.border),
-    );
 }
 
 /// The Tools section.
@@ -539,17 +608,21 @@ fn tools_note(ui: &mut Ui, p: &Palette) {
     ui.label(
         egui::RichText::new(
             "Editing, export, redaction, forms and signing all act on an open \
-             document — open one and they appear in the toolbar.",
+             document — open one and they appear in the tool dock and the menus.",
         )
-        .size(12.0)
+        .font(theme::body(12.5))
         .color(p.text_muted),
     );
-    ui.add_space(8.0);
-    ui.label(
-        egui::RichText::new("Ctrl+Shift+P lists every command Quark has.")
-            .size(12.0)
-            .color(p.text_faint),
-    );
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        widgets::shortcut(ui, p, "Ctrl+Shift+P");
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("lists every command Quark has.")
+                .font(theme::body(12.5))
+                .color(p.text_faint),
+        );
+    });
 }
 
 #[cfg(test)]

@@ -26,8 +26,8 @@ toml.workspace = true
 dirs.workspace = true
 image.workspace = true
 chrono.workspace = true
-
-[target.'cfg(windows)'.dependencies]
+# Not Windows-only: the credential calls the assistant makes are used on every
+# platform, and the crate compiles to "not supported" stubs off Windows.
 quark-shell.workspace = true
 
 [build-dependencies]

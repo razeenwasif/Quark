@@ -6,7 +6,7 @@ use egui::Context;
 use quark_core::annot::Annotation;
 use quark_core::geom::Rot;
 use quark_core::history::Edit;
-use quark_core::prefs::Prefs;
+use quark_core::prefs::{Prefs, SidePanel};
 use quark_core::tools::Tool;
 use quark_pdf::service::{DocOp, PdfService, Request, Response};
 use quark_ui::theme::{self, Palette, ThemeMode};
@@ -16,7 +16,7 @@ use crate::shortcuts::{self, Binding};
 use crate::tab::Tab;
 use crate::textures::TextureCache;
 
-/// A transient message shown in the status bar.
+/// A transient message, floated over the bottom-right of the work area.
 pub(crate) struct Toast {
     pub(crate) text: String,
     pub(crate) error: bool,
@@ -63,6 +63,14 @@ pub struct App {
     /// The home screen. Always first in the tab strip, whether or not it is
     /// the surface currently showing.
     pub(crate) home: crate::home::HomeState,
+    /// The side panel to bring back when the pages island is reopened.
+    pub(crate) last_side_panel: SidePanel,
+    /// The highlighted row in the command palette.
+    pub(crate) palette_index: usize,
+    /// Whether the palette was showing last frame.
+    pub(crate) palette_was_open: bool,
+    /// The velvet grain tile, and which theme it was built for.
+    pub(crate) grain: Option<(bool, egui::TextureHandle)>,
 }
 
 impl App {
@@ -73,8 +81,12 @@ impl App {
         } else {
             ThemeMode::Light
         };
+        theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, theme);
-        cc.egui_ctx.set_pixels_per_point(prefs.ui_scale.clamp(0.5, 3.0));
+        // A zoom on top of the display's own scale, not a replacement for it:
+        // setting pixels-per-point directly to 1.0 drew the whole interface at
+        // half size on a Retina display.
+        cc.egui_ctx.set_zoom_factor(prefs.ui_scale.clamp(0.5, 3.0));
 
         let service = PdfService::start();
         let textures = TextureCache::new(prefs.raster_cache_mb);
@@ -99,6 +111,10 @@ impl App {
             dock: Dock::default(),
             dock_open: true,
             home: crate::home::HomeState::default(),
+            last_side_panel: SidePanel::Thumbnails,
+            palette_index: 0,
+            palette_was_open: false,
+            grain: None,
         };
 
         let pending = std::mem::take(&mut app.startup_files);

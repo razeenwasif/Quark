@@ -60,6 +60,24 @@ pub enum Icon {
     Grid,
     Check,
     Warning,
+    Document,
+    Home,
+    /// The assistant.
+    Sparkle,
+    /// Send, in a composer.
+    ArrowUp,
+    More,
+    Reply,
+    Upload,
+    Clock,
+    Image,
+    /// The dock toggle: a window with its right-hand column marked.
+    Sidebar,
+    /// The side-panel toggle: the left-hand column marked.
+    SidebarLeft,
+    Shapes,
+    Minimize,
+    Maximize,
 }
 
 /// Draws `icon` centred in `rect`, in `color`.
@@ -72,9 +90,29 @@ pub fn draw(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
     let w = (s * 0.09).clamp(1.2, 2.4);
     let stroke = Stroke::new(w, color);
 
-    let line = |a: Pos2, b: Pos2| painter.line_segment([a, b], stroke);
+    // Round caps and joins, so no icon has a sharp corner. egui strokes are
+    // mitred; a dot of the stroke's width at every vertex rounds them off.
+    // Only for opaque colours — under a translucent one the dots would show
+    // as darker beads where they overlap the stroke.
+    let round = color.a() == 255;
+    let cap = |at: Pos2| {
+        if round {
+            painter.circle_filled(at, w / 2.0, color);
+        }
+    };
+    let line = |a: Pos2, b: Pos2| {
+        painter.line_segment([a, b], stroke);
+        cap(a);
+        cap(b);
+    };
     let poly = |pts: Vec<Pos2>| {
+        for &pt in &pts {
+            cap(pt);
+        }
         painter.add(egui::Shape::line(pts, stroke));
+    };
+    let rounded = |r: Rect, radius: f32| {
+        painter.rect_stroke(r, radius, stroke, egui::StrokeKind::Middle);
     };
 
     match icon {
@@ -89,21 +127,29 @@ pub fn draw(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             p(0.28, 0.18),
         ]),
         Icon::Hand => {
-            poly(vec![
-                p(0.30, 0.62),
-                p(0.30, 0.40),
-                p(0.38, 0.34),
-                p(0.46, 0.40),
-            ]);
-            poly(vec![p(0.46, 0.38), p(0.46, 0.28), p(0.54, 0.24), p(0.62, 0.30)]);
-            poly(vec![
-                p(0.30, 0.60),
-                p(0.30, 0.74),
-                p(0.42, 0.84),
-                p(0.62, 0.84),
-                p(0.70, 0.72),
-                p(0.70, 0.40),
-            ]);
+            // Three fingers and a thumb, each a rounded stroke, closing into
+            // the palm — drawn on a 24-unit grid like the rest of the set.
+            let g = |x: f32, y: f32| p(x / 24.0, y / 24.0);
+            let finger = |x: f32, base: f32, tip: f32| {
+                let mut pts = vec![g(x, base), g(x, tip)];
+                for i in 0..=8 {
+                    let a = std::f32::consts::PI * (1.0 + i as f32 / 8.0);
+                    pts.push(g(x + 1.5 + 1.5 * a.cos(), tip + 1.5 * a.sin()));
+                }
+                pts.push(g(x + 3.0, base));
+                pts
+            };
+            poly(finger(8.5, 12.5, 6.5));
+            poly(finger(11.5, 11.0, 5.0));
+            let mut palm = finger(14.5, 11.5, 7.0);
+            palm.pop();
+            palm.push(g(17.5, 14.0));
+            for i in 1..=8 {
+                let a = std::f32::consts::FRAC_PI_2 * (i as f32 / 8.0);
+                palm.push(g(11.0 + 6.5 * a.cos(), 14.0 + 6.5 * a.sin()));
+            }
+            palm.extend([g(9.6, 20.4), g(7.6, 19.6), g(5.9, 18.1), g(3.6, 14.6), g(3.8, 13.0), g(5.0, 12.3), g(6.3, 12.8), g(8.5, 15.5)]);
+            poly(palm);
         }
         Icon::ZoomIn | Icon::ZoomOut | Icon::Search => {
             painter.circle_stroke(p(0.44, 0.44), s * 0.24, stroke);
@@ -116,12 +162,15 @@ pub fn draw(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             }
         }
         Icon::Highlight => {
+            // A chisel-tipped marker over the line it has just drawn.
+            let g = |x: f32, y: f32| p(x / 24.0, y / 24.0);
+            poly(vec![g(15.0, 4.5), g(19.5, 9.0), g(11.0, 17.5), g(6.5, 17.5), g(6.5, 13.0), g(15.0, 4.5)]);
+            line(g(12.5, 7.0), g(17.0, 11.5));
             painter.rect_filled(
-                Rect::from_min_max(p(0.20, 0.62), p(0.80, 0.76)),
-                2.0,
-                color.gamma_multiply(0.45),
+                Rect::from_min_max(g(4.0, 19.6), g(13.0, 21.4)),
+                s * 0.04,
+                color.gamma_multiply(0.55),
             );
-            poly(vec![p(0.28, 0.56), p(0.50, 0.22), p(0.72, 0.56)]);
         }
         Icon::Underline => {
             poly(vec![p(0.32, 0.22), p(0.32, 0.52), p(0.68, 0.52), p(0.68, 0.22)]);
@@ -425,6 +474,85 @@ pub fn draw(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             }
         }
         Icon::Check => poly(vec![p(0.24, 0.52), p(0.42, 0.70), p(0.76, 0.30)]),
+        Icon::Document => {
+            poly(vec![
+                p(0.58, 0.16),
+                p(0.30, 0.16),
+                p(0.26, 0.20),
+                p(0.26, 0.80),
+                p(0.30, 0.84),
+                p(0.70, 0.84),
+                p(0.74, 0.80),
+                p(0.74, 0.32),
+                p(0.58, 0.16),
+            ]);
+            poly(vec![p(0.56, 0.18), p(0.56, 0.34), p(0.72, 0.34)]);
+        }
+        Icon::Home => poly(vec![
+            p(0.18, 0.46),
+            p(0.50, 0.20),
+            p(0.82, 0.46),
+            p(0.78, 0.80),
+            p(0.60, 0.80),
+            p(0.60, 0.60),
+            p(0.40, 0.60),
+            p(0.40, 0.80),
+            p(0.22, 0.80),
+            p(0.18, 0.46),
+        ]),
+        Icon::Sparkle => {
+            // A four-pointed star with concave sides, as a smooth curve.
+            let c = rect.center();
+            let mut pts = Vec::new();
+            for i in 0..=64 {
+                let t = std::f32::consts::TAU * (i as f32 / 64.0);
+                // Astroid: x = cos³, y = sin³.
+                let (x, y) = (t.cos().powi(3), t.sin().powi(3));
+                pts.push(pos2(c.x + x * s * 0.34, c.y + y * s * 0.34));
+            }
+            painter.add(egui::Shape::line(pts, stroke));
+        }
+        Icon::ArrowUp => {
+            line(p(0.50, 0.78), p(0.50, 0.24));
+            poly(vec![p(0.28, 0.46), p(0.50, 0.24), p(0.72, 0.46)]);
+        }
+        Icon::More => {
+            for x in [0.26, 0.50, 0.74] {
+                painter.circle_filled(p(x, 0.50), w * 0.85, color);
+            }
+        }
+        Icon::Reply => {
+            poly(vec![p(0.40, 0.30), p(0.20, 0.50), p(0.40, 0.70)]);
+            poly(vec![p(0.20, 0.50), p(0.58, 0.50), p(0.72, 0.58), p(0.80, 0.76)]);
+        }
+        Icon::Upload => {
+            line(p(0.50, 0.64), p(0.50, 0.20));
+            poly(vec![p(0.32, 0.38), p(0.50, 0.20), p(0.68, 0.38)]);
+            poly(vec![p(0.20, 0.62), p(0.20, 0.80), p(0.80, 0.80), p(0.80, 0.62)]);
+        }
+        Icon::Clock => {
+            painter.circle_stroke(p(0.5, 0.5), s * 0.32, stroke);
+            poly(vec![p(0.50, 0.32), p(0.50, 0.50), p(0.62, 0.58)]);
+        }
+        Icon::Image => {
+            rounded(Rect::from_min_max(p(0.16, 0.22), p(0.84, 0.78)), s * 0.10);
+            painter.circle_stroke(p(0.38, 0.42), s * 0.06, stroke);
+            poly(vec![p(0.24, 0.74), p(0.56, 0.48), p(0.80, 0.68)]);
+        }
+        Icon::Sidebar => {
+            rounded(Rect::from_min_max(p(0.16, 0.22), p(0.84, 0.78)), s * 0.12);
+            line(p(0.60, 0.22), p(0.60, 0.78));
+        }
+        Icon::SidebarLeft => {
+            rounded(Rect::from_min_max(p(0.16, 0.22), p(0.84, 0.78)), s * 0.12);
+            line(p(0.40, 0.22), p(0.40, 0.78));
+        }
+        Icon::Shapes => {
+            rounded(Rect::from_min_max(p(0.16, 0.42), p(0.58, 0.84)), s * 0.10);
+            painter.circle_stroke(p(0.64, 0.36), s * 0.20, stroke);
+        }
+        Icon::Minimize => line(p(0.26, 0.50), p(0.74, 0.50)),
+        Icon::Maximize => rounded(Rect::from_min_max(p(0.26, 0.26), p(0.74, 0.74)), s * 0.12),
         Icon::Warning => {
             poly(vec![p(0.50, 0.20), p(0.84, 0.78), p(0.16, 0.78), p(0.50, 0.20)]);
             line(p(0.50, 0.40), p(0.50, 0.58));

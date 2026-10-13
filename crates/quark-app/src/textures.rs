@@ -168,6 +168,9 @@ impl TextureCache {
         self.pending.retain(|k, _| k.page != page);
     }
 
+    /// Read by the tests, and the first number to look at when memory looks
+    /// wrong; the status bar that used to show it is gone.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn used_mb(&self) -> f32 {
         self.used_bytes as f32 / (1024.0 * 1024.0)
     }

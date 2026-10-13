@@ -18,12 +18,17 @@
 //! else here combined.
 //!
 //! Usage: `cargo xtask build|run|test|check|clippy|dist|clean [-- extra args]`
+//!
+//! On a Mac, `cargo xtask bundle-mac [--install]` builds natively instead; see
+//! [`macos`].
 
 use std::env;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+
+mod macos;
 
 /// Drive letters tried when mapping the WSL share, in order. Deliberately from
 /// the back of the alphabet to avoid colliding with real volumes.
@@ -52,7 +57,8 @@ fn main() -> Result<()> {
         "clippy" => cargo(&["clippy"], rest),
         "clean" => cargo(&["clean"], rest),
         "dist" => dist(rest),
-        "fetch-pdfium" => fetch_pdfium(),
+        "fetch-pdfium" => fetch_pdfium(rest),
+        "bundle-mac" => macos::bundle(rest),
         "where" => {
             let env = WinEnv::detect()?;
             println!("distro:     {}", env.distro);
@@ -66,7 +72,7 @@ fn main() -> Result<()> {
         _ => {
             eprintln!(
                 "usage: cargo xtask <build|run|test|check|clippy|dist|clean|fetch-pdfium|where> \
-                 [-- cargo args]"
+                 [-- cargo args]\n       cargo xtask bundle-mac [--install]"
             );
             Ok(())
         }
@@ -383,9 +389,18 @@ fn win_path_to_wsl(p: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(format!("/mnt/{drive}{rest}")))
 }
 
-/// Downloads the pinned PDFium build for both platforms.
-fn fetch_pdfium() -> Result<()> {
+/// Downloads the pinned PDFium build for every platform Quark ships on.
+///
+/// A library already vendored is left alone unless `--force` is passed, so
+/// adding a platform does not re-download the others.
+fn fetch_pdfium(args: &[String]) -> Result<()> {
+    let force = args.iter().any(|a| a == "--force");
     let root = repo_root()?;
+    let mac = if cfg!(target_arch = "x86_64") {
+        "mac-x64"
+    } else {
+        "mac-arm64"
+    };
     let targets = [
         ("win-x64", "vendor/pdfium", "bin/pdfium.dll", "pdfium.dll"),
         (
@@ -394,10 +409,15 @@ fn fetch_pdfium() -> Result<()> {
             "lib/libpdfium.so",
             "libpdfium.so",
         ),
+        (mac, "vendor/pdfium-mac", "lib/libpdfium.dylib", "libpdfium.dylib"),
     ];
 
     for (platform, dest_dir, inner, name) in targets {
         let dest = root.join(dest_dir);
+        if dest.join(name).exists() && !force {
+            println!("  {platform}: already vendored");
+            continue;
+        }
         std::fs::create_dir_all(&dest)?;
         let url = format!(
             "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F{PDFIUM_BUILD}/pdfium-{platform}.tgz"
@@ -406,7 +426,7 @@ fn fetch_pdfium() -> Result<()> {
 
         let tmp = std::env::temp_dir().join(format!("pdfium-{platform}.tgz"));
         let status = Command::new("curl")
-            .args(["-sSL", "-o"])
+            .args(["-fsSL", "-o"])
             .arg(&tmp)
             .arg(&url)
             .status()
