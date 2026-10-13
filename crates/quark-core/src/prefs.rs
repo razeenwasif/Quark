@@ -86,6 +86,12 @@ pub struct Prefs {
     /// Base URL for the OpenAI-compatible backend, so one client can serve
     /// OpenAI, Groq, OpenRouter and the rest.
     pub ai_base_url: String,
+    /// What the Claude Code assistant may do beyond answering: read and
+    /// search files in the document's folder, search and open web pages, and
+    /// — off unless asked for — change files in that folder.
+    pub ai_files: bool,
+    pub ai_web: bool,
+    pub ai_edits: bool,
     pub show_toolbar: bool,
     pub show_status_bar: bool,
     pub tool_style: ToolStyle,
@@ -126,6 +132,10 @@ impl Default for Prefs {
             ai_model: "llama3.2".into(),
             ai_scope: "nearby".into(),
             ai_base_url: "https://api.openai.com/v1".into(),
+            ai_files: true,
+            ai_web: true,
+            // Writing into someone's document folder is opt-in.
+            ai_edits: false,
             show_toolbar: true,
             show_status_bar: true,
             tool_style: ToolStyle::default(),

@@ -340,8 +340,9 @@ impl App {
             &doc,
             history,
             // Generous, and streamed, so a long answer is not truncated by a
-            // ceiling the user never chose.
-            8192,
+            // ceiling the user never chose. Thinking counts against it too, so
+            // it is sized for the reasoning as well as the reply.
+            64_000,
         );
 
         // The credential is fetched per turn rather than held: it is then never
@@ -350,6 +351,31 @@ impl App {
             quark_ai::Backend::Ollama => Box::new(quark_ai::Ollama::local()),
             quark_ai::Backend::Anthropic => {
                 Box::new(quark_ai::Anthropic::new(self.stored_key(backend)))
+            }
+            // Answers on the user's Claude subscription through their own
+            // `claude` CLI. If it was not found, the bare name is tried, and a
+            // failure to start comes back as a message saying how to fix it.
+            quark_ai::Backend::ClaudeCode => {
+                // The tools the reader has switched on, confined to the open
+                // document's folder.
+                let document = self.tab().and_then(|t| t.path().map(|p| p.to_path_buf()));
+                let access = quark_ai::claude_code::Access {
+                    files: self.prefs.ai_files,
+                    edits: self.prefs.ai_edits,
+                    web: self.prefs.ai_web,
+                    folder: document.as_ref().and_then(|d| d.parent().map(|f| f.to_path_buf())),
+                    document,
+                };
+                Box::new(
+                    quark_ai::ClaudeCode::new(
+                        self.ai
+                            .claude_path
+                            .clone()
+                            .or_else(quark_ai::ClaudeCode::locate)
+                            .unwrap_or_else(|| PathBuf::from("claude")),
+                    )
+                    .with_access(access),
+                )
             }
             quark_ai::Backend::OpenAiCompat => Box::new(quark_ai::OpenAiCompat::new(
                 "OpenAI-compatible",
@@ -371,7 +397,7 @@ impl App {
         let env_name = match backend {
             quark_ai::Backend::Anthropic => "ANTHROPIC_API_KEY",
             quark_ai::Backend::OpenAiCompat => "OPENAI_API_KEY",
-            quark_ai::Backend::Ollama => return String::new(),
+            quark_ai::Backend::Ollama | quark_ai::Backend::ClaudeCode => return String::new(),
         };
         if let Ok(k) = std::env::var(env_name) {
             if !k.trim().is_empty() {
@@ -392,22 +418,26 @@ impl App {
         // front, rather than buried in settings — and not at all for Ollama,
         // where it would be untrue.
         if backend.leaves_the_machine() && !self.ai.egress_acknowledged {
+            // Claude Code runs locally, but the model behind it does not, so
+            // the warning names where the text actually goes.
+            let (title, body) = if backend == quark_ai::Backend::ClaudeCode {
+                (
+                    "Claude Code answers from Anthropic's servers".to_string(),
+                    "Asking a question sends the pages in scope, and any selected \
+                     text, to Anthropic on your Claude account.",
+                )
+            } else {
+                (
+                    format!("{} runs in the cloud", backend.label()),
+                    "Asking a question sends the pages in scope, and any selected \
+                     text, to it.",
+                )
+            };
             theme::card(p).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new(format!("{} runs in the cloud", backend.label()))
-                        .font(theme::strong(13.0))
-                        .color(p.text),
-                );
+                ui.label(RichText::new(title).font(theme::strong(13.0)).color(p.text));
                 ui.add_space(2.0);
-                ui.label(
-                    RichText::new(
-                        "Asking a question sends the pages in scope, and any \
-                         selected text, to it.",
-                    )
-                    .font(theme::body(12.5))
-                    .color(p.text_muted),
-                );
+                ui.label(RichText::new(body).font(theme::body(12.5)).color(p.text_muted));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     if widgets::primary_button(ui, p, "I understand", true).clicked() {
@@ -434,6 +464,7 @@ impl App {
             let lister: Box<dyn quark_ai::Provider> = match backend {
                 quark_ai::Backend::Ollama => Box::new(quark_ai::Ollama::local()),
                 quark_ai::Backend::Anthropic => Box::new(quark_ai::Anthropic::new(String::new())),
+                quark_ai::Backend::ClaudeCode => Box::new(quark_ai::ClaudeCode::new("claude")),
                 quark_ai::Backend::OpenAiCompat => Box::new(quark_ai::OpenAiCompat::new(
                     "OpenAI-compatible",
                     self.prefs.ai_base_url.clone(),
@@ -447,6 +478,9 @@ impl App {
         // store is a syscall, and doing it every frame is sixty a second.
         if self.ai.key_state.map(|(b, _)| b) != Some(backend) {
             self.ai.key_state = Some((backend, assistant::key_source(backend)));
+            if backend == quark_ai::Backend::ClaudeCode {
+                self.ai.claude_path = quark_ai::ClaudeCode::locate();
+            }
         }
         let source = self.ai.key_state.map(|(_, s)| s).unwrap_or(assistant::KeySource::Missing);
 
@@ -495,7 +529,44 @@ impl App {
             });
 
             // --- credentials ---
-            if backend.leaves_the_machine() {
+            //
+            // Claude Code has none to manage: the CLI holds the sign-in. What
+            // matters is whether the CLI is there at all.
+            if backend == quark_ai::Backend::ClaudeCode {
+                let found = self.ai.claude_path.clone();
+                let (label, colour) = match &found {
+                    Some(_) => ("Uses your Claude Code sign-in", p.success),
+                    None => ("Claude Code not found", p.warning),
+                };
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().circle_filled(dot.center(), 3.5, colour);
+                    let status = ui.label(RichText::new(label).font(theme::strong(11.5)).color(colour));
+                    if let Some(path) = &found {
+                        status.on_hover_text(path.display().to_string());
+                    } else {
+                        // Only worth offering while it is missing: installed
+                        // since the panel looked is the case this is for.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if widgets::ghost_button(ui, p, "Check again").clicked() {
+                                self.ai.claude_path = quark_ai::ClaudeCode::locate();
+                            }
+                        });
+                    }
+                });
+                if found.is_none() {
+                    ui.label(
+                        RichText::new(format!(
+                            "Install Claude Code from claude.com/claude-code and run \
+                             `claude` once to sign in, or set {} to its path.",
+                            quark_ai::claude_code::PATH_OVERRIDE
+                        ))
+                        .font(theme::body(11.0))
+                        .color(p.text_faint),
+                    );
+                }
+            } else if backend.leaves_the_machine() {
                 let (label, colour) = match source {
                     assistant::KeySource::Environment => (
                         format!("Key from {}", assistant::env_var(backend).unwrap_or("")),
@@ -519,7 +590,10 @@ impl App {
                 });
             }
 
-            if self.ai.settings_open && backend.leaves_the_machine() {
+            if self.ai.settings_open
+                && backend.leaves_the_machine()
+                && backend.credential_key().is_some()
+            {
                 ui.add_space(6.0);
                 // Base URL, for the one backend that needs to be pointed somewhere.
                 if backend == quark_ai::Backend::OpenAiCompat {
@@ -656,6 +730,62 @@ impl App {
         });
         ui.add_space(8.0);
 
+        // --- what Claude Code may do beyond answering ---
+        //
+        // Beside the scope for the same reason: it changes what leaves the
+        // machine. Files and edits are confined to the document's folder, so
+        // an unsaved document, which has none, cannot offer them.
+        if backend == quark_ai::Backend::ClaudeCode {
+            let has_folder = self.tab().and_then(|t| t.path()).is_some();
+            ui.horizontal(|ui| {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(widgets::micro_caps("Tools"))
+                        .font(theme::strong(10.5))
+                        .color(p.text_faint),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let unsaved = "Save the document first: file access is confined to its folder";
+                    for (label, on, tip, available) in [
+                        (
+                            "Edits",
+                            &mut self.prefs.ai_edits,
+                            "Let it create and change files in this document's folder. PDFs stay read-only.",
+                            has_folder,
+                        ),
+                        (
+                            "Web",
+                            &mut self.prefs.ai_web,
+                            "Let it search the web and open pages",
+                            true,
+                        ),
+                        (
+                            "Files",
+                            &mut self.prefs.ai_files,
+                            "Let it read and search files in this document's folder, the PDF included",
+                            has_folder,
+                        ),
+                    ] {
+                        let response = ui
+                            .add_enabled_ui(available, |ui| {
+                                widgets::text_button(ui, p, label, *on && available)
+                            })
+                            .inner;
+                        if response.clicked() {
+                            *on = !*on;
+                        }
+                        if available {
+                            response.on_hover_text(tip);
+                        } else {
+                            response.on_disabled_hover_text(unsaved);
+                        }
+                    }
+                });
+            });
+            ui.add_space(8.0);
+        }
+
         // --- conversation ---
         let composer = 60.0;
         egui::ScrollArea::vertical()
@@ -705,8 +835,14 @@ impl App {
                                 .inner_margin(egui::Margin::symmetric(12, 9))
                                 .show(ui, |ui| {
                                     ui.set_max_width(width * 0.84);
-                                    ui.label(
-                                        RichText::new(&turn.text).font(theme::body(12.5)).color(p.text),
+                                    // Wrapped explicitly: in a right-to-left
+                                    // row a label extends instead, and a long
+                                    // question would push the dock wider.
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&turn.text).font(theme::body(12.5)).color(p.text),
+                                        )
+                                        .wrap(),
                                     );
                                 });
                         });
@@ -723,6 +859,28 @@ impl App {
                         );
                         ui.label(RichText::new(backend.label()).font(theme::strong(12.0)).color(p.text));
                     });
+                    // What was read, searched or opened on the way, so the
+                    // answer's sources are on screen with it.
+                    for step in &turn.activity {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 7.0;
+                            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 16.0), egui::Sense::hover());
+                            let refused = step.starts_with("Not allowed");
+                            ui.painter().circle_filled(
+                                dot.center(),
+                                2.5,
+                                if refused { p.warning } else { p.accent_alpha(0x99) },
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(step)
+                                        .font(theme::body(11.5))
+                                        .color(if refused { p.warning } else { p.text_faint }),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    }
                     if !turn.thinking.is_empty() {
                         egui::CollapsingHeader::new(
                             RichText::new("Reasoning").font(theme::strong(11.5)).color(p.text_faint),

@@ -80,6 +80,10 @@ pub enum Delta {
     /// Summarised reasoning, where the provider returns any. Shown separately
     /// so it can be collapsed — it is not the answer.
     Thinking(String),
+    /// A tool the model used on the way to its answer, described for the
+    /// reader ("Read notes.txt", "Web search “…”"). Only agentic backends
+    /// send these.
+    Tool(String),
     /// The turn finished. Always exactly one, last.
     Done(StopReason),
 }

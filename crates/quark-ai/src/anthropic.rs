@@ -2,7 +2,8 @@
 //!
 //! Native rather than through an OpenAI-compatible shim, because three things
 //! this panel wants only exist here: a cache breakpoint on the document text,
-//! adaptive thinking, and server-side refusal fallbacks.
+//! adaptive thinking with an explicit effort, and server-side refusal
+//! fallbacks.
 
 use std::sync::atomic::AtomicBool;
 
@@ -25,13 +26,29 @@ const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 /// and the list changes far more slowly than the panel is opened. `/v1/models`
 /// is the escape hatch if that stops being true.
 pub const MODELS: &[&str] = &[
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-haiku-4-5",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+    "claude-fable-5-1",
 ];
 
-/// The default. Opus 5 unless the user picks otherwise.
-pub const DEFAULT_MODEL: &str = "claude-opus-5";
+/// The default. Opus 5.5 unless the user picks otherwise.
+pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
+
+/// How hard the model thinks. Set explicitly because the defaults differ
+/// between models — Opus 5.5 and Haiku 5.5 default to `medium`, the rest to
+/// `high` — and an answer about a document should not quietly get shallower
+/// when the model is switched.
+pub const EFFORT: &str = "high";
+
+/// Whether a model takes the server-side refusal fallback.
+///
+/// Haiku has none: with `fallbacks: "default"` a decline simply stays
+/// declined, and any other form is a 400. Everything else in the list
+/// accepts the `"default"` form.
+pub fn supports_fallback(model: &str) -> bool {
+    !model.starts_with("claude-haiku")
+}
 
 pub struct Anthropic {
     key: String,
@@ -64,7 +81,7 @@ impl Anthropic {
             .map(|m| json!({ "role": m.role.wire(), "content": m.text }))
             .collect();
 
-        json!({
+        let mut body = json!({
             "model": req.model,
             "max_tokens": req.max_tokens,
             "stream": true,
@@ -80,9 +97,13 @@ impl Anthropic {
             // Adaptive lets the model decide how much to think; `summarized`
             // means the panel can show reasoning instead of a long silence.
             "thinking": { "type": "adaptive", "display": "summarized" },
-            "fallbacks": "default",
+            "output_config": { "effort": EFFORT },
             "messages": messages,
-        })
+        });
+        if supports_fallback(&req.model) {
+            body["fallbacks"] = json!("default");
+        }
+        body
     }
 }
 
@@ -105,11 +126,15 @@ impl Provider for Anthropic {
             return Err(AiError::NoKey("Anthropic".into()));
         }
         let url = format!("{}/v1/messages", self.base);
-        let response = ureq::post(&url)
+        let mut request = ureq::post(&url)
             .header("content-type", "application/json")
             .header("x-api-key", &self.key)
-            .header("anthropic-version", API_VERSION)
-            .header("anthropic-beta", FALLBACK_BETA)
+            .header("anthropic-version", API_VERSION);
+        // Only alongside the parameter it enables.
+        if supports_fallback(&req.model) {
+            request = request.header("anthropic-beta", FALLBACK_BETA);
+        }
+        let response = request
             .send(serde_json::to_string(&self.body(req)).unwrap_or_default())
             .map_err(|e| match e {
                 ureq::Error::StatusCode(status) => AiError::Status {
@@ -309,8 +334,30 @@ mod tests {
     }
 
     #[test]
-    fn the_default_model_is_opus_5() {
-        assert_eq!(DEFAULT_MODEL, "claude-opus-5");
+    fn effort_is_set_explicitly() {
+        // The per-model defaults differ, so leaving it out would change answer
+        // depth whenever the model is switched.
+        let b = Anthropic::new("k").body(&request());
+        assert_eq!(b["output_config"]["effort"], EFFORT);
+    }
+
+    #[test]
+    fn the_refusal_fallback_goes_only_to_models_that_take_it() {
+        let with = |model: &str| {
+            let mut r = request();
+            r.model = model.into();
+            Anthropic::new("k").body(&r)
+        };
+        for model in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"] {
+            assert_eq!(with(model)["fallbacks"], "default", "{model}");
+        }
+        // Haiku has no fallback; sending one is at best a no-op.
+        assert!(with("claude-haiku-5-5").get("fallbacks").is_none());
+    }
+
+    #[test]
+    fn the_default_model_is_opus_5_5() {
+        assert_eq!(DEFAULT_MODEL, "claude-opus-5-5");
         assert!(MODELS.contains(&DEFAULT_MODEL));
         // Model ids are complete as published; a date suffix is a 404.
         for m in MODELS {

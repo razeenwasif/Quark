@@ -13,6 +13,9 @@ pub(crate) struct Turn {
     /// Summarised reasoning, where the provider returned any. Kept apart from
     /// `text` so it can be collapsed — it is not the answer.
     pub(crate) thinking: String,
+    /// The tools used on the way to the answer, in order: what was read,
+    /// searched or opened. Shown above the answer so its sources are visible.
+    pub(crate) activity: Vec<String>,
     /// Set when the turn ended in something the reader should know about: a
     /// refusal, a truncation, or an error.
     pub(crate) note: Option<String>,
@@ -24,6 +27,7 @@ impl Turn {
             mine: true,
             text,
             thinking: String::new(),
+            activity: Vec::new(),
             note: None,
         }
     }
@@ -33,6 +37,7 @@ impl Turn {
             mine: false,
             text: String::new(),
             thinking: String::new(),
+            activity: Vec::new(),
             note: None,
         }
     }
@@ -65,6 +70,9 @@ pub(crate) struct Assistant {
     /// Cached answer to "is a key stored for this backend", so the panel does
     /// not hit the credential store every frame.
     pub(crate) key_state: Option<(Backend, KeySource)>,
+    /// Where the `claude` CLI was found, looked up when Claude Code is chosen
+    /// rather than every frame — it is a walk over several directories.
+    pub(crate) claude_path: Option<std::path::PathBuf>,
 }
 
 /// Where the key for the selected backend is coming from.
@@ -91,6 +99,7 @@ impl Assistant {
             settings_open: false,
             key_input: String::new(),
             key_state: None,
+            claude_path: None,
         }
     }
 
@@ -121,6 +130,12 @@ impl Assistant {
         match delta {
             Delta::Text(t) => turn.text.push_str(&t),
             Delta::Thinking(t) => turn.thinking.push_str(&t),
+            // The same call twice in a row is one step to the reader.
+            Delta::Tool(t) => {
+                if turn.activity.last() != Some(&t) {
+                    turn.activity.push(t);
+                }
+            }
             Delta::Done(reason) => {
                 turn.note = match reason {
                     StopReason::EndTurn => None,
@@ -173,7 +188,8 @@ impl Assistant {
 /// own SDKs use so an existing shell setup just works.
 pub(crate) fn env_var(b: Backend) -> Option<&'static str> {
     match b {
-        Backend::Ollama => None,
+        // Claude Code signs in through its own CLI, never with a key.
+        Backend::Ollama | Backend::ClaudeCode => None,
         Backend::Anthropic => Some("ANTHROPIC_API_KEY"),
         Backend::OpenAiCompat => Some("OPENAI_API_KEY"),
     }
@@ -221,6 +237,7 @@ pub(crate) const BASE_URL_PRESETS: [(&str, &str); 4] = [
 pub(crate) fn backend_of(prefs: &Prefs) -> Backend {
     match prefs.ai_backend.as_str() {
         "anthropic" => Backend::Anthropic,
+        "claude-code" => Backend::ClaudeCode,
         "openai" => Backend::OpenAiCompat,
         _ => Backend::Ollama,
     }
@@ -230,6 +247,7 @@ pub(crate) fn backend_key(b: Backend) -> &'static str {
     match b {
         Backend::Ollama => "ollama",
         Backend::Anthropic => "anthropic",
+        Backend::ClaudeCode => "claude-code",
         Backend::OpenAiCompat => "openai",
     }
 }
@@ -261,6 +279,11 @@ mod tests {
         assert_eq!(env_var(Backend::Anthropic), Some("ANTHROPIC_API_KEY"));
         assert_eq!(env_var(Backend::OpenAiCompat), Some("OPENAI_API_KEY"));
         assert_eq!(env_var(Backend::Ollama), None, "the local backend has no key");
+        assert_eq!(
+            env_var(Backend::ClaudeCode),
+            None,
+            "Claude Code signs in through its CLI, not an API key"
+        );
     }
 
     #[test]
@@ -323,6 +346,22 @@ mod tests {
         assert_eq!(a.turns[1].text, "It is a book.");
         assert!(a.turns[1].note.is_none());
         assert!(a.in_flight.is_none(), "the turn never finished");
+    }
+
+    #[test]
+    fn tool_steps_are_kept_apart_from_the_answer() {
+        let mut a = assistant();
+        a.begin(1, "what is this?".into());
+        a.apply(1, Delta::Tool("Read notes.txt".into()));
+        a.apply(1, Delta::Tool("Read notes.txt".into()));
+        a.apply(1, Delta::Tool("Web search \u{201c}x\u{201d}".into()));
+        a.apply(1, Delta::Text("An answer.".into()));
+        a.apply(1, Delta::Done(StopReason::EndTurn));
+        assert_eq!(a.turns[1].activity.len(), 2, "a repeated step is shown once");
+        assert_eq!(a.turns[1].text, "An answer.");
+        // Only the answer goes back to the model as history.
+        let h = a.history();
+        assert_eq!(h.last().unwrap().text, "An answer.");
     }
 
     #[test]

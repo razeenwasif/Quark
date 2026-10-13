@@ -2,10 +2,11 @@
 //!
 //! # Shape
 //!
-//! Three providers behind one [`Provider`] trait — Anthropic's native Messages
-//! API, anything speaking OpenAI's chat-completions format, and Ollama on the
-//! local machine. Each streams [`Delta`] values in arrival order; the panel
-//! above never learns which one answered.
+//! Four providers behind one [`Provider`] trait — Anthropic's native Messages
+//! API, Claude Code (which answers on the user's Claude subscription),
+//! anything speaking OpenAI's chat-completions format, and Ollama on the local
+//! machine. Each streams [`Delta`] values in arrival order; the panel above
+//! never learns which one answered.
 //!
 //! # Why blocking HTTP
 //!
@@ -21,6 +22,7 @@
 //! came from.
 
 pub mod anthropic;
+pub mod claude_code;
 pub mod context;
 pub mod ollama;
 pub mod openai;
@@ -29,6 +31,7 @@ pub mod service;
 pub mod sse;
 
 pub use anthropic::Anthropic;
+pub use claude_code::ClaudeCode;
 pub use ollama::Ollama;
 pub use openai::OpenAiCompat;
 pub use context::{DocContext, Scope};
@@ -45,16 +48,25 @@ pub enum Backend {
     #[default]
     Ollama,
     Anthropic,
+    /// The `claude` CLI, signed into the user's own account — a Claude
+    /// subscription, with no API key involved.
+    ClaudeCode,
     OpenAiCompat,
 }
 
 impl Backend {
-    pub const ALL: [Backend; 3] = [Backend::Ollama, Backend::Anthropic, Backend::OpenAiCompat];
+    pub const ALL: [Backend; 4] = [
+        Backend::Ollama,
+        Backend::ClaudeCode,
+        Backend::Anthropic,
+        Backend::OpenAiCompat,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Backend::Ollama => "Ollama (local)",
-            Backend::Anthropic => "Anthropic",
+            Backend::Anthropic => "Anthropic API",
+            Backend::ClaudeCode => "Claude Code",
             Backend::OpenAiCompat => "OpenAI-compatible",
         }
     }
@@ -62,10 +74,10 @@ impl Backend {
     /// The credential-store key this backend's secret is filed under.
     ///
     /// `None` for Ollama, which has no credential at all — that absence is the
-    /// point of offering it.
+    /// point of offering it — and for Claude Code, whose sign-in the CLI keeps.
     pub fn credential_key(self) -> Option<&'static str> {
         match self {
-            Backend::Ollama => None,
+            Backend::Ollama | Backend::ClaudeCode => None,
             Backend::Anthropic => Some("quark/anthropic"),
             Backend::OpenAiCompat => Some("quark/openai-compatible"),
         }
@@ -82,6 +94,7 @@ impl Backend {
         match self {
             Backend::Ollama => "llama3.2",
             Backend::Anthropic => anthropic::DEFAULT_MODEL,
+            Backend::ClaudeCode => claude_code::DEFAULT_MODEL,
             Backend::OpenAiCompat => "gpt-4o-mini",
         }
     }
@@ -106,6 +119,14 @@ mod tests {
             assert!(b.credential_key().is_some(), "{b:?} needs a key");
             assert!(b.leaves_the_machine());
         }
+    }
+
+    #[test]
+    fn claude_code_needs_no_key_but_still_leaves_the_machine() {
+        // It answers on the user's subscription, so there is nothing to store
+        // — but the pages still go to Anthropic, and the warning must say so.
+        assert!(Backend::ClaudeCode.credential_key().is_none());
+        assert!(Backend::ClaudeCode.leaves_the_machine());
     }
 
     #[test]
