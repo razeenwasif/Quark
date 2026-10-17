@@ -29,6 +29,7 @@ chrono.workspace = true
 # Not Windows-only: the credential calls the assistant makes are used on every
 # platform, and the crate compiles to "not supported" stubs off Windows.
 quark-shell.workspace = true
+crossbeam-channel.workspace = true
 
 [build-dependencies]
 ico.workspace = true

@@ -131,9 +131,12 @@ fn run(cmd: &mut Command) -> Result<()> {
 
 /// The bundle's `Info.plist`.
 ///
-/// No `CFBundleDocumentTypes`: winit does not deliver the Apple Events Finder
-/// sends to open a file, so claiming PDFs would put Quark in Open With and then
-/// launch it without the document.
+/// It claims PDFs as a viewer, so Quark is in Open With and macOS sends it
+/// the files it is asked to open — to the running Quark, not a new one each
+/// time. winit does not deliver those Apple Events, so
+/// `quark_shell::open_requests` hears them itself. The rank is `Alternate`:
+/// Quark offers to open PDFs without taking over as the default; the user
+/// chooses that in Finder's Get Info.
 pub fn info_plist(version: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -162,6 +165,21 @@ pub fn info_plist(version: &str) -> String {
     <string>public.app-category.productivity</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>PDF document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.adobe.pdf</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 "#
@@ -307,6 +325,7 @@ mod tests {
         assert!(plist.contains("<string>quark</string>"));
         assert!(plist.contains("<string>Quark</string>"));
         assert!(plist.contains("1.2.3"));
-        assert!(!plist.contains("CFBundleDocumentTypes"));
+        assert!(plist.contains("<string>com.adobe.pdf</string>"), "claims PDFs");
+        assert!(plist.contains("<string>Viewer</string>"));
     }
 }

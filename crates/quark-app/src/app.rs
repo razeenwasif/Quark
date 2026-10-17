@@ -55,6 +55,9 @@ pub struct App {
     pub(crate) search_token: u64,
     /// Files waiting to be opened once the engine reports ready.
     pub(crate) startup_files: Vec<PathBuf>,
+    /// Files macOS asks Quark to open, as they come; see
+    /// `quark_shell::open_requests`.
+    pub(crate) opened: crossbeam_channel::Receiver<Vec<PathBuf>>,
     /// Which panel the right-hand dock shows, and whether it is open at all.
     pub(crate) dock: Dock,
     pub(crate) dock_open: bool,
@@ -74,7 +77,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, files: Vec<PathBuf>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        files: Vec<PathBuf>,
+        opened: crossbeam_channel::Receiver<Vec<PathBuf>>,
+    ) -> Self {
         let prefs = load_prefs();
         let theme = if prefs.theme_dark {
             ThemeMode::Dark
@@ -87,6 +94,23 @@ impl App {
         // setting pixels-per-point directly to 1.0 drew the whole interface at
         // half size on a Retina display.
         cc.egui_ctx.set_zoom_factor(prefs.ui_scale.clamp(0.5, 3.0));
+
+        // A file sent by macOS reaches the channel while Quark may be idle,
+        // drawing nothing until something happens. Passed on through a thread
+        // that asks for a frame, so it is opened at once.
+        let opened = {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let ctx = cc.egui_ctx.clone();
+            let _ = std::thread::Builder::new().name("open-requests".into()).spawn(move || {
+                for paths in opened.iter() {
+                    if tx.send(paths).is_err() {
+                        return;
+                    }
+                    ctx.request_repaint();
+                }
+            });
+            rx
+        };
 
         let service = PdfService::start();
         let textures = TextureCache::new(prefs.raster_cache_mb);
@@ -107,6 +131,7 @@ impl App {
             palette_query: String::new(),
             search_token: 0,
             startup_files: files,
+            opened,
             ai: crate::assistant::Assistant::new(),
             dock: Dock::default(),
             dock_open: true,

@@ -9,6 +9,15 @@ license.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+crossbeam-channel.workspace = true
+
+# Hearing the files macOS asks Quark to open; see `open_requests`.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSNotification", "NSObject", "NSString", "NSURL",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

@@ -65,6 +65,8 @@ pub fn print_command(exe: &Path) -> String {
     format!("\"{}\" --print \"%1\"", exe.display())
 }
 
+pub mod open_requests;
+
 #[cfg(windows)]
 mod win {
     use super::*;

@@ -198,11 +198,20 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
+    // Files macOS asks Quark to open — a PDF double-clicked in Finder,
+    // `open -a Quark`, one sent while Quark is already running. Listened for
+    // before eframe starts, because the ones that launch the app arrive
+    // before it has built anything.
+    let (open_tx, opened) = crossbeam_channel::unbounded();
+    if let Err(e) = quark_shell::open_requests::watch(open_tx) {
+        tracing::warn!("{e}; files opened from Finder will not reach Quark");
+    }
+
     let files = args.files;
     eframe::run_native(
         "Quark",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, files)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, files, opened)))),
     )
 }
 

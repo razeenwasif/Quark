@@ -2530,6 +2530,17 @@ impl eframe::App for App {
             self.open_path(&f, None);
         }
 
+        // Files sent by macOS: each opens in a tab of this window, which
+        // comes forward to show it.
+        let sent: Vec<PathBuf> = self.opened.try_iter().flatten().collect();
+        if !sent.is_empty() {
+            for f in sent {
+                tracing::info!(path = %f.display(), "opening a file macOS sent");
+                self.open_path(&f, None);
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+
         // Keyboard, but not while a dialog or the palette has focus — otherwise
         // typing a password would fire every accelerator it contains.
         if self.dialog.is_none() && !self.show_palette {
