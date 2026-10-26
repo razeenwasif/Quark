@@ -1,5 +1,6 @@
-//! Comments: highlights, underlines and strike-outs over text, sticky
-//! notes, text boxes, ink, rectangles, ellipses and lines — each written as
+//! Comments: highlights, underlines, squiggles and strike-outs over text,
+//! sticky notes, text boxes, ink, rectangles, ellipses, polygons, polylines
+//! and lines — each written as
 //! the PDF standard has it, with an appearance of its own (`/AP`), so every
 //! viewer draws it as Quark does; listed, with their replies, recoloured,
 //! edited and deleted.
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::pages;
 
 /// The kinds a comment may be.
-const KINDS: [&str; 10] = [
+const KINDS: [&str; 12] = [
     "Highlight",
     "Underline",
     "StrikeOut",
@@ -21,15 +22,17 @@ const KINDS: [&str; 10] = [
     "Square",
     "Circle",
     "Line",
+    "Polygon",
+    "PolyLine",
 ];
 
 /// What a new comment is: its kind and where, as the window says it — in
 /// the page's own points, from its bottom left.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Mark {
-    /// `highlight`, `underline`, `strike`, `note`, `text`, `ink`, `square`,
-    /// `circle`, `line` or `arrow`.
+    /// `highlight`, `underline`, `strike`, `squiggly`, `note`, `text`,
+    /// `ink`, `square`, `circle`, `line`, `arrow`, `polygon` or `polyline`.
     pub kind: String,
     /// Over text: a box per line, `[x1, y1, x2, y2]`.
     #[serde(default)]
@@ -37,13 +40,23 @@ pub struct Mark {
     /// A note's point, a text box's or shape's box, a line's two ends.
     #[serde(default)]
     pub rect: Option<[f32; 4]>,
-    /// Ink: strokes, each a run of points.
+    /// Ink: strokes, each a run of points. A polygon's or polyline's
+    /// corners: the first stroke.
     #[serde(default)]
     pub strokes: Vec<Vec<[f32; 2]>>,
     /// `#ffd400`.
     pub color: String,
     #[serde(default)]
     pub text: String,
+    /// How wide its lines are, in points: 2 when not said.
+    #[serde(default)]
+    pub width: Option<f32>,
+    /// How opaque, 0 to 1: a highlight's 0.4, the rest 1, when not said.
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// A shape's fill, `#rrggbb`: none when not said.
+    #[serde(default)]
+    pub fill: Option<String>,
 }
 
 /// A comment as the window lists it.
@@ -210,11 +223,36 @@ fn drawing(
     text: &str,
     arrow: bool,
 ) -> String {
+    drawn(
+        kind, rect, quads, strokes, line, color, text, arrow, 2.0, None,
+    )
+}
+
+/// As [`drawing`], its lines `width` wide, and a shape filled with `fill`.
+#[allow(clippy::too_many_arguments)]
+fn drawn(
+    kind: &str,
+    rect: [f32; 4],
+    quads: &[[f32; 8]],
+    strokes: &[Vec<[f32; 2]>],
+    line: Option<[f32; 4]>,
+    color: [f32; 3],
+    text: &str,
+    arrow: bool,
+    width: f32,
+    fill: Option<[f32; 3]>,
+) -> String {
     let [r, g, b] = color;
     let (rg, rg_stroke) = (
         format!("{} {} {} rg", n(r), n(g), n(b)),
         format!("{} {} {} RG", n(r), n(g), n(b)),
     );
+    let w = n(width);
+    // A shape is filled, then stroked, when it has a fill.
+    let (fill_op, paint) = match fill {
+        Some([fr, fg, fb]) => (format!(" {} {} {} rg", n(fr), n(fg), n(fb)), "B"),
+        None => (String::new(), "S"),
+    };
     let mut out = String::from("q /G gs ");
     match kind {
         "Highlight" => {
@@ -289,8 +327,55 @@ fn drawing(
             }
             out.push_str(" ET");
         }
+        "Squiggly" => {
+            // A wave under each line of text, a period a little over its
+            // height.
+            out.push_str(&rg_stroke);
+            for q in quads {
+                let height = (q[1] - q[5]).abs();
+                let (x1, x2, y) = (q[4], q[6], q[5] + height * 0.06);
+                let step = (height / 4.0).max(1.5);
+                let amp = (height / 12.0).max(0.6);
+                out.push_str(&format!(
+                    " {} w {} {} m",
+                    n((height / 16.0).max(0.4)),
+                    n(x1),
+                    n(y)
+                ));
+                let mut x = x1;
+                let mut up = true;
+                while x < x2 {
+                    x = (x + step).min(x2);
+                    out.push_str(&format!(
+                        " {} {} l",
+                        n(x),
+                        n(if up { y + amp } else { y - amp })
+                    ));
+                    up = !up;
+                }
+                out.push_str(" S");
+            }
+        }
+        "Polygon" | "PolyLine" => {
+            if let Some(points) = strokes.first() {
+                out.push_str(&format!("{rg_stroke}{fill_op} {w} w 1 J 1 j"));
+                for (i, [x, y]) in points.iter().enumerate() {
+                    out.push_str(&format!(
+                        " {} {} {}",
+                        n(*x),
+                        n(*y),
+                        if i == 0 { "m" } else { "l" }
+                    ));
+                }
+                if kind == "Polygon" {
+                    out.push_str(&format!(" h {paint}"));
+                } else {
+                    out.push_str(" S");
+                }
+            }
+        }
         "Ink" => {
-            out.push_str(&format!("{rg_stroke} 2 w 1 J 1 j"));
+            out.push_str(&format!("{rg_stroke} {w} w 1 J 1 j"));
             for stroke in strokes {
                 for (i, [x, y]) in stroke.iter().enumerate() {
                     out.push_str(&format!(
@@ -309,7 +394,7 @@ fn drawing(
         "Square" => {
             let [x1, y1, x2, y2] = rect;
             out.push_str(&format!(
-                "{rg_stroke} 2 w {} {} {} {} re S",
+                "{rg_stroke}{fill_op} {w} w {} {} {} {} re {paint}",
                 n(x1 + 1.0),
                 n(y1 + 1.0),
                 n(x2 - x1 - 2.0),
@@ -327,7 +412,7 @@ fn drawing(
             );
             let k = 0.5523;
             out.push_str(&format!(
-                "{rg_stroke} 2 w {} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c S",
+                "{rg_stroke}{fill_op} {w} w {} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {paint}",
                 n(cx + rx), n(cy),
                 n(cx + rx), n(cy + k * ry), n(cx + k * rx), n(cy + ry), n(cx), n(cy + ry),
                 n(cx - k * rx), n(cy + ry), n(cx - rx), n(cy + k * ry), n(cx - rx), n(cy),
@@ -338,7 +423,7 @@ fn drawing(
         "Line" => {
             if let Some([x1, y1, x2, y2]) = line {
                 out.push_str(&format!(
-                    "{rg_stroke} 2 w 1 J {} {} m {} {} l S",
+                    "{rg_stroke} {w} w 1 J {} {} m {} {} l S",
                     n(x1),
                     n(y1),
                     n(x2),
@@ -446,6 +531,9 @@ pub fn add(
         "highlight" => ("Highlight", 0.4, true),
         "underline" => ("Underline", 1.0, false),
         "strike" => ("StrikeOut", 1.0, false),
+        "squiggly" => ("Squiggly", 1.0, false),
+        "polygon" => ("Polygon", 1.0, false),
+        "polyline" => ("PolyLine", 1.0, false),
         "note" => ("Text", 1.0, false),
         "text" => ("FreeText", 1.0, false),
         "ink" => ("Ink", 1.0, false),
@@ -454,6 +542,9 @@ pub fn add(
         "line" | "arrow" => ("Line", 1.0, false),
         other => return Err(format!("{other}: not a kind of comment")),
     };
+    let alpha = mark.opacity.map(|o| o.clamp(0.05, 1.0)).unwrap_or(alpha);
+    let width = mark.width.map(|w| w.clamp(0.25, 72.0)).unwrap_or(2.0);
+    let fill = mark.fill.as_deref().map(rgb);
     let mut annot = dictionary! {
         "Type" => "Annot",
         "Subtype" => subtype,
@@ -469,8 +560,14 @@ pub fn add(
     if !mark.text.is_empty() {
         annot.set("Contents", text_string(&mark.text));
     }
+    if mark.width.is_some() {
+        annot.set("BS", dictionary! { "W" => width });
+    }
+    if let Some(f) = fill {
+        annot.set("IC", f.iter().map(|c| Object::Real(*c)).collect::<Vec<_>>());
+    }
     let (rect, content) = match subtype {
-        "Highlight" | "Underline" | "StrikeOut" => {
+        "Highlight" | "Underline" | "StrikeOut" | "Squiggly" => {
             if mark.boxes.is_empty() {
                 return Err("mark some text first".into());
             }
@@ -520,17 +617,59 @@ pub fn add(
                     .map(|s| Object::Array(s.iter().flatten().map(|v| Object::Real(*v)).collect()))
                     .collect::<Vec<_>>(),
             );
-            let rect = bounds(mark.strokes.iter().flatten().copied(), 2.0);
+            let rect = bounds(mark.strokes.iter().flatten().copied(), width.max(2.0));
             (
                 rect,
-                drawing(subtype, rect, &[], &mark.strokes, None, color, "", false),
+                drawn(
+                    subtype,
+                    rect,
+                    &[],
+                    &mark.strokes,
+                    None,
+                    color,
+                    "",
+                    false,
+                    width,
+                    None,
+                ),
+            )
+        }
+        "Polygon" | "PolyLine" => {
+            let points = mark
+                .strokes
+                .first()
+                .filter(|p| p.len() >= 2)
+                .ok_or("place two corners or more")?;
+            annot.set(
+                "Vertices",
+                points
+                    .iter()
+                    .flatten()
+                    .map(|v| Object::Real(*v))
+                    .collect::<Vec<_>>(),
+            );
+            let rect = bounds(points.iter().copied(), width.max(2.0));
+            (
+                rect,
+                drawn(
+                    subtype,
+                    rect,
+                    &[],
+                    &mark.strokes[..1],
+                    None,
+                    color,
+                    "",
+                    false,
+                    width,
+                    fill,
+                ),
             )
         }
         "Square" | "Circle" => {
             let rect = norm(mark.rect.ok_or("say where it goes")?);
             (
                 rect,
-                drawing(subtype, rect, &[], &[], None, color, "", false),
+                drawn(subtype, rect, &[], &[], None, color, "", false, width, fill),
             )
         }
         _ => {
@@ -552,7 +691,18 @@ pub fn add(
             let rect = bounds([[ends[0], ends[1]], [ends[2], ends[3]]], 10.0);
             (
                 rect,
-                drawing("Line", rect, &[], &[], Some(ends), color, "", arrow),
+                drawn(
+                    "Line",
+                    rect,
+                    &[],
+                    &[],
+                    Some(ends),
+                    color,
+                    "",
+                    arrow,
+                    width,
+                    None,
+                ),
             )
         }
     };
@@ -862,6 +1012,9 @@ mod tests {
             strokes: Vec::new(),
             color: "#ffd400".into(),
             text: String::new(),
+            width: None,
+            opacity: None,
+            fill: None,
         }
     }
 
@@ -1086,5 +1239,113 @@ mod tests {
         let mut bytes = Vec::new();
         d.save_to(&mut bytes).unwrap();
         std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn squiggles_polygons_and_polylines_are_written_with_their_width_opacity_and_fill() {
+        let mut d = doc();
+        let corners = vec![[100.0, 500.0], [160.0, 560.0], [220.0, 500.0]];
+        let squiggly = add(
+            &mut d,
+            1,
+            &Mark {
+                boxes: vec![[72.0, 716.0, 180.0, 732.0]],
+                ..mark("squiggly")
+            },
+            "Ada",
+            "D:",
+            "s",
+        )
+        .unwrap();
+        let polygon = add(
+            &mut d,
+            1,
+            &Mark {
+                strokes: vec![corners.clone()],
+                width: Some(4.0),
+                opacity: Some(0.5),
+                fill: Some("#00ff00".into()),
+                ..mark("polygon")
+            },
+            "Ada",
+            "D:",
+            "p",
+        )
+        .unwrap();
+        let polyline = add(
+            &mut d,
+            1,
+            &Mark {
+                strokes: vec![corners],
+                ..mark("polyline")
+            },
+            "Ada",
+            "D:",
+            "l",
+        )
+        .unwrap();
+        let get = |id| d.get_object(id).unwrap().as_dict().unwrap().clone();
+        let p = get(polygon);
+        assert_eq!(p.get(b"Subtype").unwrap().as_name().unwrap(), b"Polygon");
+        assert_eq!(p.get(b"Vertices").unwrap().as_array().unwrap().len(), 6);
+        assert_eq!(p.get(b"CA").unwrap().as_float().unwrap(), 0.5);
+        assert_eq!(
+            p.get(b"BS")
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(b"W")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            4.0
+        );
+        assert_eq!(p.get(b"IC").unwrap().as_array().unwrap().len(), 3);
+        let ap = p
+            .get(b"AP")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"N")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let drawn =
+            String::from_utf8_lossy(&d.get_object(ap).unwrap().as_stream().unwrap().content)
+                .to_string();
+        assert!(
+            drawn.contains(" 4 w") && drawn.contains(" h B"),
+            "filled and stroked 4 wide: {drawn}"
+        );
+        assert_eq!(
+            get(polyline).get(b"Subtype").unwrap().as_name().unwrap(),
+            b"PolyLine"
+        );
+        assert_eq!(
+            get(squiggly).get(b"Subtype").unwrap().as_name().unwrap(),
+            b"Squiggly"
+        );
+        let kinds: Vec<String> = list(&d).into_iter().map(|c| c.kind).collect();
+        assert!(
+            kinds.contains(&"Squiggly".into())
+                && kinds.contains(&"Polygon".into())
+                && kinds.contains(&"PolyLine".into()),
+            "{kinds:?}"
+        );
+        assert!(
+            add(
+                &mut d,
+                1,
+                &Mark {
+                    strokes: vec![vec![[1.0, 1.0]]],
+                    ..mark("polygon")
+                },
+                "Ada",
+                "D:",
+                "x"
+            )
+            .is_err(),
+            "one corner is not a polygon"
+        );
     }
 }

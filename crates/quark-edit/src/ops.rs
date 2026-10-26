@@ -77,6 +77,15 @@ pub enum Op {
     Compress,
     /// What OCR read of pages laid over them: each page's text-only PDF.
     Ocr { pages: Vec<(u32, Arc<Vec<u8>>)> },
+    /// The whole document as another tool remade it — Quark's crop, stamps,
+    /// Bates numbers, redaction, bookmarks — from what this one is now.
+    /// `whole` when what it took out must not stay in the file's earlier
+    /// bytes, as redaction's must not: then it is saved whole.
+    Remade {
+        said: String,
+        bytes: Arc<Vec<u8>>,
+        whole: bool,
+    },
 }
 
 impl Op {
@@ -127,6 +136,7 @@ impl Op {
                     format!("make {} pages searchable", pages.len())
                 }
             }
+            Op::Remade { said, .. } => said.clone(),
         }
     }
 
@@ -143,6 +153,7 @@ impl Op {
                 | Op::InsertFrom { .. }
                 | Op::Flatten
                 | Op::Ocr { .. }
+                | Op::Remade { .. }
         )
     }
 
@@ -160,6 +171,7 @@ impl Op {
             Op::SetField { .. } | Op::Flatten | Op::SetInfo { .. } | Op::Ocr { .. } => true,
             // Appended, these would leave what they change in the bytes before.
             Op::Protect { .. } | Op::Unprotect | Op::Sanitize | Op::Compress => false,
+            Op::Remade { whole, .. } => !whole,
         }
     }
 
@@ -258,6 +270,23 @@ impl Op {
             Op::Ocr { pages } => {
                 for (page, text) in pages {
                     crate::ocr::graft(doc, *page, text)?;
+                }
+                Ok(())
+            }
+            Op::Remade { bytes, .. } => {
+                let remade = Document::load_mem(bytes)
+                    .map_err(|e| format!("what was remade could not be read: {e}"))?;
+                doc.objects = remade.objects;
+                doc.max_id = remade.max_id;
+                // Its catalogue and properties as remade; its ID and
+                // whatever else the trailer says, as they were.
+                for key in [b"Root".as_slice(), b"Info".as_slice()] {
+                    match remade.trailer.get(key) {
+                        Ok(value) => doc.trailer.set(key, value.clone()),
+                        Err(_) => {
+                            doc.trailer.remove(key);
+                        }
+                    }
                 }
                 Ok(())
             }

@@ -566,6 +566,7 @@ mod tests {
             strokes: Vec::new(),
             color: "#ffd400".into(),
             text: text.into(),
+            ..Default::default()
         };
         let read = |bytes: Vec<u8>| {
             let d = Document::load_mem(&bytes).unwrap();
@@ -617,6 +618,7 @@ mod tests {
             strokes: Vec::new(),
             color: "#ffd400".into(),
             text: "Hm".into(),
+            ..Default::default()
         };
         doc.apply(Op::Comment {
             page: 1,
@@ -727,5 +729,42 @@ mod tests {
             "plain again"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_document_remade_elsewhere_is_one_undoable_change_saved_whole_when_it_must_be() {
+        let mut doc = editable(fixture(&["One", "Two", "Three"]));
+        // Another tool's work: the last page taken out.
+        let mut other = Document::load_mem(&doc.view_bytes().unwrap()).unwrap();
+        other.delete_pages(&[3]);
+        let mut remade = Vec::new();
+        other.save_to(&mut remade).unwrap();
+        let layout = doc.layout();
+        doc.apply(Op::Remade {
+            said: "redact".into(),
+            bytes: Arc::new(remade.clone()),
+            whole: true,
+        })
+        .unwrap();
+        assert_eq!(doc.pages(), 2);
+        assert!(doc.layout() > layout);
+        assert_eq!(doc.undoable().as_deref(), Some("redact"));
+        // Saved whole: none of the file's first bytes are kept after it.
+        assert!(!doc
+            .bytes()
+            .unwrap()
+            .starts_with(&doc.disk[..doc.disk.len() - 1]));
+        doc.undo().unwrap();
+        assert_eq!(doc.pages(), 3);
+        doc.redo().unwrap();
+        // Not whole: appended to the file as it was.
+        let mut kept = editable(fixture(&["One", "Two", "Three"]));
+        kept.apply(Op::Remade {
+            said: "crop".into(),
+            bytes: Arc::new(remade),
+            whole: false,
+        })
+        .unwrap();
+        assert!(kept.bytes().unwrap().starts_with(&kept.disk));
     }
 }
