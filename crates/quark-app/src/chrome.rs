@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use egui::{Context, RichText};
+use quark_core::annot::AnnotKind;
 use quark_core::command::{Command, Menu, command_table};
 use quark_core::geom::{Rot, Vec2};
 use quark_core::layout::{self, ZoomMode};
@@ -1384,12 +1385,18 @@ impl App {
                 if let Some(t) = self.tab_mut() {
                     if let Some(a) = t.find_annotation(id) {
                         let (page, rect) = (a.page, a.rect);
+                        if t.selected_annotation != Some(id) {
+                            t.reply_draft.clear();
+                        }
                         t.selected_annotation = Some(id);
                         t.reveal(page, rect);
                     }
                 }
             }
             PanelAction::DeleteAnnotation(id) => self.delete_annotation(id),
+            PanelAction::EditText(id) => self.write_in(id),
+            PanelAction::Reply { id, text } => self.reply_to(id, text),
+            PanelAction::Recolor { id, color } => self.edit_annotation(id, Some(color), None),
             PanelAction::GoToHit(i) => {
                 let hit = self.tab().and_then(|t| t.search.hits.get(i).cloned());
                 if let (Some(hit), Some(t)) = (hit, self.tab_mut()) {
@@ -1435,6 +1442,15 @@ impl App {
                     .and_then(|t| t.fields.iter().find(|f| f.name == name).map(|f| (f.page, f.rect)));
                 if let (Some((page, rect)), Some(t)) = (target, self.tab_mut()) {
                     t.reveal(page, rect);
+                }
+                // Text and choices open for writing; boxes and buttons are
+                // only shown, not changed, by choosing them in the list.
+                use quark_pdf::forms::FieldKind;
+                let field = self.tab().and_then(|t| t.fields.iter().find(|f| f.name == name).cloned());
+                if let Some(f) = field.filter(|f| {
+                    !f.read_only && matches!(f.kind, FieldKind::Text | FieldKind::ComboBox | FieldKind::ListBox)
+                }) {
+                    self.activate_field(f);
                 }
             }
         }
@@ -2070,7 +2086,7 @@ impl App {
             Command::PrepareForm | Command::HighlightFields => {
                 self.prefs.side_panel = SidePanel::Fields;
             }
-            Command::FlattenForm => self.toast("Form flattening is not implemented", false),
+            Command::FlattenForm => self.apply_op(DocOp::FlattenForm),
             Command::ExportFormData => self.toast("Form export is not implemented", false),
             Command::ImportFormData => self.toast("Form import is not implemented", false),
             Command::ClearForm => self.apply_op(DocOp::ClearForm),
@@ -2358,7 +2374,29 @@ impl App {
 
     fn handle_viewer_action(&mut self, action: ViewerAction, ctx: &Context) {
         match action {
+            ViewerAction::Then(first, then) => {
+                self.handle_viewer_action(*first, ctx);
+                self.handle_viewer_action(*then, ctx);
+            }
             ViewerAction::None => {}
+            // A note or text box is written before it is made: none is made
+            // empty.
+            ViewerAction::CreateAnnotation(ann)
+                if matches!(ann.kind, AnnotKind::Note { .. } | AnnotKind::FreeText { .. }) =>
+            {
+                if let Some(t) = self.tab_mut() {
+                    t.editing = Some(crate::tab::Editing {
+                        page: ann.page,
+                        rect: ann.rect,
+                        text: String::new(),
+                        target: crate::tab::EditTarget::New(ann),
+                        focused: false,
+                    });
+                }
+                if !self.tool.is_sticky() {
+                    self.tool = Tool::Select;
+                }
+            }
             ViewerAction::CreateAnnotation(ann) => {
                 // The page raster is now out of date for that one page; the
                 // rest of the document is untouched, so only it is dropped.
@@ -2420,10 +2458,19 @@ impl App {
                 });
                 self.tool = Tool::Select;
             }
-            ViewerAction::ActivateField(name) => {
-                self.prefs.side_panel = SidePanel::Fields;
-                self.toast(format!("Field: {name}"), false);
+            ViewerAction::ActivateField(field) => self.activate_field(*field),
+            ViewerAction::Written { target, text } => {
+                if let Some(t) = self.tab_mut() {
+                    t.editing = None;
+                }
+                self.keep_written(target, text);
             }
+            ViewerAction::StopWriting => {
+                if let Some(t) = self.tab_mut() {
+                    t.editing = None;
+                }
+            }
+            ViewerAction::EditText(id) => self.write_in(id),
             ViewerAction::GoToPage(page) => {
                 if let Some(t) = self.tab_mut() {
                     t.go_to_page(page);
@@ -2478,6 +2525,45 @@ impl App {
             Err(e) => self.toast(format!("Could not render the page: {e}"), true),
         }
         self.tool = Tool::Select;
+    }
+}
+
+impl App {
+    /// A field clicked, or chosen in the Fields panel.
+    fn activate_field(&mut self, field: quark_pdf::forms::FormField) {
+        use crate::tab::FieldClick;
+        match crate::tab::clicked(&field) {
+            FieldClick::Set(value) => self.apply_op(DocOp::SetFieldValue { name: field.name, value }),
+            FieldClick::Write(editing) => {
+                if let Some(t) = self.tab_mut() {
+                    t.editing = Some(editing);
+                }
+            }
+            FieldClick::Nothing => {}
+        }
+    }
+
+    /// What was written in place, kept.
+    fn keep_written(&mut self, target: crate::tab::EditTarget, text: String) {
+        use crate::tab::Kept;
+        let Some(kept) = self.tab().map(|t| t.kept(target, text)) else { return };
+        match kept {
+            Kept::Nothing => {}
+            Kept::Field { name, value, text: true } => self.apply_op(DocOp::SetFieldText { name, value }),
+            Kept::Field { name, value, text: false } => self.apply_op(DocOp::SetFieldValue { name, value }),
+            Kept::Make(ann) => self.commit_annotation(*ann),
+            Kept::Say { id, contents } => self.edit_annotation(id, None, Some(contents)),
+        }
+    }
+
+    /// Write in a note or text box already on the page, or the comment on
+    /// any other mark.
+    fn write_in(&mut self, id: quark_core::annot::AnnotId) {
+        let Some(t) = self.tab_mut() else { return };
+        let Some(editing) = t.writing_in(id) else { return };
+        t.go_to_page(editing.page);
+        t.selected_annotation = Some(id);
+        t.editing = Some(editing);
     }
 }
 
@@ -2571,7 +2657,15 @@ impl eframe::App for App {
         if self.dialog.is_none() && !self.show_palette {
             let typing = ctx.memory(|m| m.focused().is_some());
             if let Some(cmd) = ctx.input(|i| shortcuts::matched(i, &self.bindings)) {
-                self.dispatch(cmd, ctx);
+                // While text is being typed its keys are its own — ⌘A, ⌘C,
+                // ⌘Z, Delete — and only the file's own commands get past.
+                let filing = matches!(
+                    cmd,
+                    Command::Save | Command::SaveAs | Command::Open | Command::Close | Command::CommandPalette
+                );
+                if !typing || filing {
+                    self.dispatch(cmd, ctx);
+                }
             }
             if !typing {
                 if let Some(tool) = ctx.input(shortcuts::tool_shortcut) {

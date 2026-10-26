@@ -375,6 +375,44 @@ impl App {
         }
     }
 
+    /// Recolour an annotation or change what it says. A mark waiting to be
+    /// applied changes where it waits; one in the document is a change to
+    /// it, undone like any.
+    pub(crate) fn edit_annotation(
+        &mut self,
+        id: quark_core::annot::AnnotId,
+        color: Option<quark_core::annot::Color>,
+        contents: Option<String>,
+    ) {
+        let Some(tab) = self.tab_mut() else { return };
+        if let Some(a) = tab.pending_annotations.iter_mut().find(|a| a.id == id) {
+            if let Some(c) = color {
+                a.color = c;
+            }
+            if let Some(text) = contents {
+                a.contents = text;
+            }
+            return;
+        }
+        let doc = tab.id;
+        self.service.send(Request::Apply {
+            id: doc,
+            op: Box::new(DocOp::EditAnnotation { id, color, contents }),
+        });
+    }
+
+    /// Reply to an annotation, as the person using Quark.
+    pub(crate) fn reply_to(&mut self, id: quark_core::annot::AnnotId, text: String) {
+        let author = quark_core::tools::whoami();
+        let Some(tab) = self.tab_mut() else { return };
+        if let Some(a) = tab.pending_annotations.iter_mut().find(|a| a.id == id) {
+            a.replies.push(quark_core::annot::Reply { author, contents: text, created: quark_core::annot::now_rfc3339() });
+            return;
+        }
+        let doc = tab.id;
+        self.service.send(Request::Apply { id: doc, op: Box::new(DocOp::ReplyTo { id, text, author }) });
+    }
+
     // --- service responses ---
 
     pub(crate) fn drain_service(&mut self, ctx: &Context) {

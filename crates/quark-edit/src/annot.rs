@@ -841,7 +841,6 @@ pub fn edit(
     Ok(())
 }
 
-/// Delete a comment, and the replies to it.
 /// Move a comment by `by`, in the page's points: its box and every point it
 /// has. Its appearance is drawn into its box wherever that is, so it moves
 /// with it unchanged.
@@ -883,6 +882,7 @@ pub fn shift(doc: &mut Document, id: ObjectId, by: [f32; 2]) -> Result<(), Strin
     Ok(())
 }
 
+/// Delete a comment, and the replies to it.
 pub fn delete(doc: &mut Document, id: ObjectId) -> Result<(), String> {
     let page = doc
         .get_object(id)

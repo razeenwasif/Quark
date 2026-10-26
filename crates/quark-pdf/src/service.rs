@@ -566,6 +566,13 @@ fn handle(req: Request, docs: &mut HashMap<DocId, Document>, edits: &mut Edits, 
         }
 
         Request::ReadFields { id } => {
+            // A widget each, read from the document of record, with each
+            // box's and button's own "on".
+            if let Some(Ok(edit)) = edits.get(&id) {
+                let fields = crate::edits::fields(edit);
+                let _ = tx.send(Response::Fields { id, fields });
+                return;
+            }
             let Some(doc) = docs.get(&id) else { return };
             match crate::forms::read_fields(doc) {
                 Ok(fields) => {
@@ -1302,6 +1309,85 @@ mod tests {
         let left = annotations(&svc, id);
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].id, two[1].id);
+    }
+
+    fn fields_of(svc: &PdfService, id: DocId) -> Vec<crate::forms::FormField> {
+        svc.send(Request::ReadFields { id });
+        wait_for(svc, |r| match r {
+            Response::Fields { fields, .. } => Some(fields.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_comment_is_recoloured_rewritten_and_answered_and_each_is_undone() {
+        let _g = testutil::pdfium_guard();
+        use quark_core::annot::{AnnotKind, Color, NoteIcon};
+        use quark_core::geom::Rect;
+
+        let svc = PdfService::start();
+        let id = open_sample(&svc);
+        let mut note = Annotation::new(AnnotId(1), 0, AnnotKind::Note { icon: NoteIcon::Comment }, Rect::from_xywh(100.0, 600.0, 24.0, 24.0), "Ada");
+        note.contents = "Look".into();
+        svc.send(Request::Apply { id, op: Box::new(DocOp::AddAnnotations(vec![note])) });
+        applied(&svc);
+        let made = annotations(&svc, id).remove(0);
+
+        let blue = Color { r: 0x1e, g: 0x6f, b: 0xd9, a: 255 };
+        svc.send(Request::Apply { id, op: Box::new(DocOp::EditAnnotation { id: made.id, color: Some(blue), contents: Some("Look again".into()) }) });
+        applied(&svc);
+        svc.send(Request::Apply { id, op: Box::new(DocOp::ReplyTo { id: made.id, text: "Done".into(), author: "Grace".into() }) });
+        let info = applied(&svc);
+        assert_eq!(info.undo.as_deref(), Some("reply"), "{info:?}");
+        let read = annotations(&svc, id);
+        assert_eq!(read.len(), 1, "a reply is part of its comment's thread, not a comment of its own: {read:#?}");
+        let a = &read[0];
+        assert_eq!((a.id, a.contents.as_str()), (made.id, "Look again"));
+        assert_eq!((a.color.r, a.color.g, a.color.b), (0x1e, 0x6f, 0xd9));
+        assert_eq!(a.replies.len(), 1);
+        assert_eq!((a.replies[0].author.as_str(), a.replies[0].contents.as_str()), ("Grace", "Done"));
+
+        svc.send(Request::Undo { id });
+        applied(&svc);
+        assert!(annotations(&svc, id)[0].replies.is_empty());
+        svc.send(Request::Undo { id });
+        applied(&svc);
+        assert_eq!(annotations(&svc, id)[0].contents, "Look");
+    }
+
+    #[test]
+    fn a_form_is_filled_ticked_and_flattened_and_flattening_is_undone() {
+        let _g = testutil::pdfium_guard();
+        let mut lo = lopdf::Document::load_mem(&quark_edit::fixture::fixture(&["A form"])).unwrap();
+        quark_edit::forms::sample(&mut lo);
+        let path = testutil::tmp_path("svc-form.pdf");
+        lo.save(&path).unwrap();
+        let svc = PdfService::start();
+        let id = svc.new_doc_id();
+        svc.send(Request::Open { id, path: path.clone(), password: None });
+        wait_for(&svc, |r| matches!(r, Response::Opened { .. }).then_some(()));
+
+        svc.send(Request::Apply { id, op: Box::new(DocOp::SetFieldText { name: "name".into(), value: "Ada".into() }) });
+        applied(&svc);
+        svc.send(Request::Apply { id, op: Box::new(DocOp::SetFieldValue { name: "agree".into(), value: "Yes".into() }) });
+        applied(&svc);
+        svc.send(Request::Apply { id, op: Box::new(DocOp::SetFieldValue { name: "colour".into(), value: "Blue".into() }) });
+        applied(&svc);
+        let read = fields_of(&svc, id);
+        let value = |name: &str| read.iter().find(|f| f.name == name).map(|f| f.value.clone());
+        assert_eq!(value("name").as_deref(), Some("Ada"));
+        assert_eq!(value("agree").as_deref(), Some("Yes"));
+        assert_eq!(value("colour").as_deref(), Some("Blue"));
+
+        svc.send(Request::Apply { id, op: Box::new(DocOp::FlattenForm) });
+        let info = applied(&svc);
+        assert!(fields_of(&svc, id).is_empty(), "a flattened form has no fields left");
+        assert!(info.undo.is_some());
+        svc.send(Request::Undo { id });
+        applied(&svc);
+        let back = fields_of(&svc, id);
+        assert_eq!(back.iter().find(|f| f.name == "name").map(|f| f.value.as_str()), Some("Ada"));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

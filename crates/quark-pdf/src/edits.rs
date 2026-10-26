@@ -15,6 +15,8 @@ use quark_core::annot::{
 use quark_core::geom::{Rect, Vec2};
 use quark_edit::annot::{read_text, Mark};
 
+use crate::forms::{FieldKind, FormField};
+
 /// The comment a new annotation is, as `quark-edit` writes one; none for a
 /// kind that is not a comment of its own — a redaction mark, which is
 /// applied, a stamp, an attachment.
@@ -112,6 +114,42 @@ pub fn hex(c: Color) -> String {
 /// How `quark-edit` names an annotation: its object, `12 0`.
 pub fn comment_id(id: AnnotId) -> String {
     format!("{} 0", id.0)
+}
+
+/// The form's fields, a widget each — a box or button, with its own "on" —
+/// on the page and at the place each is drawn.
+pub fn fields(doc: &quark_edit::Doc) -> Vec<FormField> {
+    let mut out = Vec::new();
+    for f in doc.fields() {
+        let kind = match f.kind.as_str() {
+            "text" => FieldKind::Text,
+            "checkbox" => FieldKind::Checkbox,
+            "radio" => FieldKind::RadioButton,
+            "combo" => FieldKind::ComboBox,
+            "list" => FieldKind::ListBox,
+            "button" => FieldKind::PushButton,
+            "signature" => FieldKind::Signature,
+            _ => FieldKind::Unknown,
+        };
+        for (i, w) in f.widgets.iter().enumerate() {
+            let [x1, y1, x2, y2] = w.rect;
+            out.push(FormField {
+                name: f.name.clone(),
+                kind,
+                page: w.page.saturating_sub(1) as usize,
+                rect: Rect::new(Vec2::new(x1, y1), Vec2::new(x2, y2)).normalize(),
+                value: f.value.clone(),
+                options: f.options.clone(),
+                read_only: f.read_only,
+                required: f.required,
+                multiline: f.multiline,
+                password: false,
+                annot_index: i,
+                on_state: w.state.clone(),
+            });
+        }
+    }
+    out
 }
 
 /// The document's annotations, page by page in the order each page lists
@@ -466,4 +504,32 @@ mod tests {
         assert_eq!(font_size("/Helv 9 Tf 0 g"), 9.0);
         assert_eq!(hex(Color::rgb(255, 212, 0)), "#ffd400");
     }
+
+    #[test]
+    fn a_forms_fields_are_a_widget_each_with_each_buttons_own_on() {
+        let mut lo = lopdf::Document::load_mem(&quark_edit::fixture::fixture(&["A form"])).unwrap();
+        quark_edit::forms::sample(&mut lo);
+        let mut bytes = Vec::new();
+        lo.save_to(&mut bytes).unwrap();
+        let mut doc = match quark_edit::Doc::open(std::sync::Arc::new(bytes)) {
+            Opened::Editable(doc) => doc,
+            _ => panic!("the form opens"),
+        };
+        let read = fields(&doc);
+        let size: Vec<&FormField> = read.iter().filter(|f| f.name == "size").collect();
+        assert_eq!(size.len(), 2, "two radio buttons, a widget each: {read:#?}");
+        assert!(size.iter().all(|f| f.kind == FieldKind::RadioButton && f.page == 0));
+        let states: Vec<Option<&str>> = size.iter().map(|f| f.on_state.as_deref()).collect();
+        assert!(states.contains(&Some("small")), "{states:?}");
+        let agree = read.iter().find(|f| f.name == "agree").unwrap();
+        assert_eq!((agree.kind, agree.on_state.as_deref(), agree.value.as_str()), (FieldKind::Checkbox, Some("Yes"), "Off"));
+        assert!(read.iter().any(|f| f.name == "notes" && f.multiline));
+        // Ticked by its own on, and read back so.
+        doc.apply(Op::SetField { name: "size".into(), value: "small".into() }).unwrap();
+        doc.apply(Op::SetField { name: "agree".into(), value: "Yes".into() }).unwrap();
+        let read = fields(&doc);
+        assert!(read.iter().filter(|f| f.name == "size").all(|f| f.value == "small"));
+        assert_eq!(read.iter().find(|f| f.name == "agree").unwrap().value, "Yes");
+    }
+
 }

@@ -76,6 +76,10 @@ pub struct FormField {
     pub password: bool,
     /// Index of the widget annotation on its page, for editing in place.
     pub annot_index: usize,
+    /// A check box's or radio button's own name for "on": what ticking this
+    /// one sets the field to.
+    #[serde(default)]
+    pub on_state: Option<String>,
 }
 
 impl FormField {
@@ -190,6 +194,7 @@ pub fn read_fields(doc: &Document) -> Result<Vec<FormField>, EngineError> {
                 multiline,
                 password,
                 annot_index,
+                on_state: None,
             });
         }
     }
@@ -404,6 +409,7 @@ mod tests {
             multiline: false,
             password: false,
             annot_index: 0,
+            on_state: None,
         };
         assert!(!f.is_filled());
         assert!(f.is_missing_required());
@@ -430,6 +436,7 @@ mod tests {
             multiline: false,
             password: false,
             annot_index: 0,
+            on_state: None,
         };
         assert!(!f.is_filled());
     }
@@ -449,6 +456,7 @@ mod tests {
             multiline: false,
             password: false,
             annot_index: 0,
+            on_state: None,
         };
         assert!(!f.is_missing_required());
     }

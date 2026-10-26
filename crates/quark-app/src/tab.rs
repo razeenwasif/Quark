@@ -116,6 +116,10 @@ pub struct Tab {
     /// An annotation being dragged, and how far it has gone: one change
     /// when it is let go.
     pub moving: Option<(AnnotId, Vec2)>,
+    /// What is being written in place on the page.
+    pub editing: Option<Editing>,
+    /// A reply being written in the comments panel, to the comment chosen.
+    pub reply_draft: String,
 
     // --- navigation history, for Previous/Next View ---
     back_stack: Vec<ViewPosition>,
@@ -128,6 +132,89 @@ pub struct Tab {
     /// annotation is a change to the document as soon as it is made.
     pub pending_annotations: Vec<Annotation>,
     next_annot_id: u64,
+}
+
+/// What is written in place on the page.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EditTarget {
+    /// A form's field: its text, or a choice of its `options`.
+    Field {
+        name: String,
+        kind: quark_pdf::forms::FieldKind,
+        options: Vec<String>,
+        multiline: bool,
+    },
+    /// A note or text box being made: kept until it is written, so none is
+    /// made empty.
+    New(Box<Annotation>),
+    /// What a note or text box already in the document says, or the
+    /// comment on any other mark.
+    Annotation(AnnotId),
+}
+
+/// What a click on a form's field does.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldClick {
+    /// A box ticked or unticked, a button chosen: the field set to it.
+    Set(String),
+    /// Text or a choice, written where the field is.
+    Write(Editing),
+    Nothing,
+}
+
+/// What writing in place comes to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Kept {
+    Nothing,
+    /// A field's text, or its choice.
+    Field { name: String, value: String, text: bool },
+    /// A note or text box, made now that it says something.
+    Make(Box<Annotation>),
+    /// What an annotation says, changed.
+    Say { id: AnnotId, contents: String },
+}
+
+/// What a click on `field` does.
+pub fn clicked(field: &FormField) -> FieldClick {
+    use quark_pdf::forms::FieldKind;
+    if field.read_only {
+        return FieldClick::Nothing;
+    }
+    match field.kind {
+        // A box is ticked by its own "on" state, whatever the form calls it.
+        FieldKind::Checkbox => {
+            let on = field.on_state.clone().unwrap_or_else(|| "Yes".into());
+            FieldClick::Set(if field.value == on { "Off".into() } else { on })
+        }
+        FieldKind::RadioButton => match &field.on_state {
+            Some(on) if *on != field.value => FieldClick::Set(on.clone()),
+            _ => FieldClick::Nothing,
+        },
+        FieldKind::Text | FieldKind::ComboBox | FieldKind::ListBox => FieldClick::Write(Editing {
+            page: field.page,
+            rect: field.rect,
+            text: field.value.clone(),
+            target: EditTarget::Field {
+                name: field.name.clone(),
+                kind: field.kind,
+                options: field.options.clone(),
+                multiline: field.multiline,
+            },
+            focused: false,
+        }),
+        _ => FieldClick::Nothing,
+    }
+}
+
+/// Writing in place: what, where, and what has been written so far.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Editing {
+    pub target: EditTarget,
+    pub page: usize,
+    pub rect: Rect,
+    pub text: String,
+    /// Whether the keyboard has been given to it yet.
+    pub focused: bool,
 }
 
 /// The inputs that determine a layout. Recomputing only when these change keeps
@@ -167,6 +254,8 @@ impl Tab {
             drafting: Drafting::None,
             search: SearchState::default(),
             moving: None,
+            editing: None,
+            reply_draft: String::new(),
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
             render_token: 1,
@@ -435,6 +524,50 @@ impl Tab {
     /// Whether there is anything unsaved.
     pub fn has_unsaved_changes(&self) -> bool {
         self.info.dirty || !self.pending_annotations.is_empty()
+    }
+
+    /// Writing in an annotation already on the page: a text box says its
+    /// text, anything else its comment. None for a locked one.
+    pub fn writing_in(&self, id: AnnotId) -> Option<Editing> {
+        use quark_core::annot::AnnotKind;
+        let a = self.find_annotation(id).filter(|a| !a.locked)?;
+        let text = match &a.kind {
+            AnnotKind::FreeText { text, .. } if !text.is_empty() => text.clone(),
+            _ => a.contents.clone(),
+        };
+        Some(Editing { page: a.page, rect: a.rect, text, target: EditTarget::Annotation(id), focused: false })
+    }
+
+    /// What writing `text` in `target` comes to: nothing when nothing
+    /// changed, and no note or text box made empty.
+    pub fn kept(&self, target: EditTarget, text: String) -> Kept {
+        use quark_core::annot::AnnotKind;
+        match target {
+            EditTarget::Field { name, kind, .. } => {
+                if !self.fields.iter().any(|f| f.name == name && f.value != text) {
+                    return Kept::Nothing;
+                }
+                Kept::Field { name, value: text, text: kind == quark_pdf::forms::FieldKind::Text }
+            }
+            EditTarget::New(mut ann) => {
+                if text.trim().is_empty() {
+                    return Kept::Nothing;
+                }
+                if let AnnotKind::FreeText { text: words, .. } = &mut ann.kind {
+                    *words = text.clone();
+                }
+                ann.contents = text;
+                Kept::Make(ann)
+            }
+            EditTarget::Annotation(id) => {
+                let Some(a) = self.find_annotation(id) else { return Kept::Nothing };
+                let was = match &a.kind {
+                    AnnotKind::FreeText { text, .. } if !text.is_empty() => text,
+                    _ => &a.contents,
+                };
+                if *was == text { Kept::Nothing } else { Kept::Say { id, contents: text } }
+            }
+        }
     }
 }
 
@@ -730,5 +863,105 @@ mod tests {
         };
         let r = d.rect().unwrap();
         assert!(r.width() > 0.0 && r.height() > 0.0);
+    }
+
+    fn field(kind: quark_pdf::forms::FieldKind, value: &str, on: Option<&str>) -> FormField {
+        FormField {
+            name: "f".into(),
+            kind,
+            page: 0,
+            rect: Rect::new(Vec2::new(10.0, 10.0), Vec2::new(110.0, 30.0)),
+            value: value.into(),
+            options: vec!["One".into(), "Two".into()],
+            read_only: false,
+            required: false,
+            multiline: false,
+            password: false,
+            annot_index: 0,
+            on_state: on.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn a_box_ticks_by_its_own_on_and_unticks_to_off() {
+        use quark_pdf::forms::FieldKind;
+        // A form that calls "on" something other than Yes is ticked by that.
+        assert_eq!(clicked(&field(FieldKind::Checkbox, "Off", Some("Agreed"))), FieldClick::Set("Agreed".into()));
+        assert_eq!(clicked(&field(FieldKind::Checkbox, "Agreed", Some("Agreed"))), FieldClick::Set("Off".into()));
+        // A button already chosen stays so; another is chosen by its own state.
+        assert_eq!(clicked(&field(FieldKind::RadioButton, "Left", Some("Left"))), FieldClick::Nothing);
+        assert_eq!(clicked(&field(FieldKind::RadioButton, "Left", Some("Right"))), FieldClick::Set("Right".into()));
+        let mut locked = field(FieldKind::Checkbox, "Off", Some("Yes"));
+        locked.read_only = true;
+        assert_eq!(clicked(&locked), FieldClick::Nothing);
+    }
+
+    #[test]
+    fn text_and_choices_are_written_where_the_field_is_and_kept_only_when_changed() {
+        use quark_pdf::forms::FieldKind;
+        let mut t = tab(1);
+        let f = field(FieldKind::Text, "Ada", None);
+        t.fields.push(f.clone());
+        let FieldClick::Write(e) = clicked(&f) else { panic!("a text field is written in") };
+        assert_eq!((e.page, e.rect, e.text.as_str()), (0, f.rect, "Ada"));
+        assert_eq!(t.kept(e.target.clone(), "Ada".into()), Kept::Nothing);
+        assert_eq!(
+            t.kept(e.target, "Grace".into()),
+            Kept::Field { name: "f".into(), value: "Grace".into(), text: true }
+        );
+        let combo = field(FieldKind::ComboBox, "One", None);
+        t.fields[0] = combo.clone();
+        let FieldClick::Write(e) = clicked(&combo) else { panic!("a choice is written in") };
+        assert_eq!(t.kept(e.target, "Two".into()), Kept::Field { name: "f".into(), value: "Two".into(), text: false });
+    }
+
+    #[test]
+    fn a_note_or_text_box_is_made_only_once_it_says_something() {
+        use quark_core::annot::{NoteIcon, TextAlign};
+        let t = tab(1);
+        let r = Rect::new(Vec2::new(50.0, 50.0), Vec2::new(70.0, 70.0));
+        let note = Annotation::new(AnnotId(1 << 48), 0, AnnotKind::Note { icon: NoteIcon::Comment }, r, "me");
+        assert_eq!(t.kept(EditTarget::New(Box::new(note.clone())), "  \n".into()), Kept::Nothing);
+        let Kept::Make(made) = t.kept(EditTarget::New(Box::new(note)), "Check this".into()) else {
+            panic!("a note that says something is made")
+        };
+        assert_eq!(made.contents, "Check this");
+        let boxed = Annotation::new(
+            AnnotId((1 << 48) + 1),
+            0,
+            AnnotKind::FreeText {
+                text: String::new(),
+                font_size: 12.0,
+                font: "Helvetica".into(),
+                align: TextAlign::Left,
+                callout: None,
+            },
+            r,
+            "me",
+        );
+        let Kept::Make(made) = t.kept(EditTarget::New(Box::new(boxed)), "Typed".into()) else {
+            panic!("a text box that says something is made")
+        };
+        // A text box shows its words, and says them as its contents too.
+        assert!(matches!(&made.kind, AnnotKind::FreeText { text, .. } if text == "Typed"));
+        assert_eq!(made.contents, "Typed");
+    }
+
+    #[test]
+    fn writing_in_a_mark_starts_from_what_it_says_and_keeps_only_a_change() {
+        use quark_core::annot::NoteIcon;
+        let mut t = tab(1);
+        let r = Rect::new(Vec2::new(50.0, 50.0), Vec2::new(200.0, 62.0));
+        let mut hl = Annotation::new(AnnotId(7), 0, AnnotKind::Highlight { quads: vec![r] }, r, "me");
+        hl.contents = "Why?".into();
+        t.annotations.push(hl);
+        let e = t.writing_in(AnnotId(7)).expect("a highlight's comment is written in");
+        assert_eq!((e.text.as_str(), &e.target), ("Why?", &EditTarget::Annotation(AnnotId(7))));
+        assert_eq!(t.kept(e.target.clone(), "Why?".into()), Kept::Nothing);
+        assert_eq!(t.kept(e.target, "Because".into()), Kept::Say { id: AnnotId(7), contents: "Because".into() });
+        let mut locked = Annotation::new(AnnotId(8), 0, AnnotKind::Note { icon: NoteIcon::Comment }, r, "me");
+        locked.locked = true;
+        t.annotations.push(locked);
+        assert_eq!(t.writing_in(AnnotId(8)), None);
     }
 }

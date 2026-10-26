@@ -37,7 +37,15 @@ pub enum ViewerAction {
     /// A crop rectangle was swept.
     Crop { page: usize, rect: Rect },
     /// A form field was clicked.
-    ActivateField(String),
+    ActivateField(Box<quark_pdf::forms::FormField>),
+    /// What was written in place, to keep.
+    Written { target: crate::tab::EditTarget, text: String },
+    /// Writing in place given up.
+    StopWriting,
+    /// A note or text box double-clicked, to change what it says.
+    EditText(quark_core::annot::AnnotId),
+    /// One, then the other.
+    Then(Box<ViewerAction>, Box<ViewerAction>),
     /// A link was followed.
     GoToPage(usize),
 }
@@ -77,7 +85,7 @@ pub fn show(
     }
 
     // --- input ---
-    let action = handle_input(ui, tab, &response, canvas, tool, prefs);
+    let mut action = handle_input(ui, tab, &response, canvas, tool, prefs);
 
     // --- request rasters for what is about to be visible ---
     request_visible(tab, service, textures, prefs);
@@ -151,10 +159,115 @@ pub fn show(
 
     paint_drafting(&painter, p, tab, tool, origin);
 
+    // Writing in place, over the page it is on. A click elsewhere that
+    // ends it still does what it does — the next field opens — after.
+    if let Some(written) = editor(ui, p, tab, &page_boxes, origin) {
+        action = match action {
+            ViewerAction::None => written,
+            then => ViewerAction::Then(Box::new(written), Box::new(then)),
+        };
+    }
+
     // Last, so the bars sit over the page rather than under it.
     scrollbars(ui, tab, canvas, p);
 
     action
+}
+
+/// Writing in place: a field's text or choice where the field is, a text
+/// box's words in it, a note's beside it. Enter (⌘Enter where there are
+/// lines) or a click elsewhere keeps what was written; Escape gives it up.
+fn editor(
+    ui: &mut Ui,
+    p: &Palette,
+    tab: &mut Tab,
+    page_boxes: &[(usize, Rect, quark_core::geom::PageSize)],
+    origin: Pos2,
+) -> Option<ViewerAction> {
+    use crate::tab::EditTarget;
+    use quark_pdf::forms::FieldKind;
+    let rotation = tab.rotation;
+    // A text box is written where it is; a note, or the comment on a
+    // highlight or a shape, in a sheet below it.
+    let note = match tab.editing.as_ref().map(|e| &e.target) {
+        Some(EditTarget::New(a)) => !matches!(a.kind, AnnotKind::FreeText { .. }),
+        Some(EditTarget::Annotation(id)) => {
+            tab.find_annotation(*id).is_some_and(|a| !matches!(a.kind, AnnotKind::FreeText { .. }))
+        }
+        _ => false,
+    };
+    let editing = tab.editing.as_mut()?;
+    let (_, rect, size) = page_boxes.iter().find(|(i, ..)| *i == editing.page)?;
+    let t = PageTransform::new(*rect, *size, rotation);
+    let c = t.page_rect_to_content(editing.rect);
+    let at = ERect::from_min_max(content_to_screen(origin, c.min), content_to_screen(origin, c.max));
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        return Some(ViewerAction::StopWriting);
+    }
+    let first = !editing.focused;
+    editing.focused = true;
+    let written = |editing: &crate::tab::Editing| ViewerAction::Written {
+        target: editing.target.clone(),
+        text: editing.text.clone(),
+    };
+    match &editing.target {
+        EditTarget::Field { kind: FieldKind::ComboBox | FieldKind::ListBox, options, .. } => {
+            let options = options.clone();
+            let mut chose = None;
+            ui.scope_builder(egui::UiBuilder::new().max_rect(at.expand(2.0)), |ui| {
+                egui::ComboBox::from_id_salt("quark-field-choice")
+                    .width(at.width().max(120.0))
+                    .selected_text(editing.text.clone())
+                    .show_ui(ui, |ui| {
+                        for o in &options {
+                            if ui.selectable_label(*o == editing.text, o).clicked() {
+                                chose = Some(o.clone());
+                            }
+                        }
+                    });
+            });
+            if let Some(o) = chose {
+                editing.text = o;
+                return Some(written(editing));
+            }
+            None
+        }
+        EditTarget::Field { multiline, .. } => {
+            let multiline = *multiline;
+            // Taken before the box sees it, which would make it a new line.
+            let enter = multiline && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+            let edit = if multiline {
+                egui::TextEdit::multiline(&mut editing.text)
+            } else {
+                egui::TextEdit::singleline(&mut editing.text)
+            };
+            let r = ui.put(at.expand(2.0), edit.font(egui::FontId::proportional((at.height() * 0.6).clamp(10.0, 16.0))).margin(egui::vec2(4.0, 2.0)));
+            if first {
+                r.request_focus();
+            }
+            (r.lost_focus() || enter).then(|| written(editing))
+        }
+        _ => {
+            let sheet = if note {
+                ERect::from_min_size(pos2(at.min.x, at.max.y + 6.0), vec2(240.0, 110.0))
+            } else {
+                at.expand(2.0).union(ERect::from_min_size(at.min, vec2(160.0, 40.0)))
+            };
+            ui.painter().rect_filled(sheet.expand(4.0), CornerRadius::same(8), p.card);
+            // Taken before the box sees it, which would make it a new line.
+            let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+            let r = ui.put(
+                sheet,
+                egui::TextEdit::multiline(&mut editing.text)
+                    .hint_text(if note { "Write the note" } else { "Write here" })
+                    .margin(egui::vec2(6.0, 4.0)),
+            );
+            if first {
+                r.request_focus();
+            }
+            (r.lost_focus() || enter).then(|| written(editing))
+        }
+    }
 }
 
 /// The paper, its shadow and its edge.
@@ -899,6 +1012,19 @@ fn handle_select(
         }
     }
 
+    // A double-click on a note or text box writes in it.
+    if response.double_clicked() {
+        let hit = tab
+            .annotations_on(page)
+            .filter(|a| a.hit_test(page_pt, tol))
+            .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
+            .filter(|a| matches!(a.kind, AnnotKind::Note { .. } | AnnotKind::FreeText { .. }))
+            .map(|a| a.id);
+        if let Some(id) = hit {
+            return ViewerAction::EditText(id);
+        }
+    }
+
     // An annotation under the pointer takes priority over text: clicking a
     // sticky note should open it, not select the words behind it.
     if response.clicked() {
@@ -932,7 +1058,7 @@ fn handle_select(
             .iter()
             .find(|f| f.page == page && f.kind.is_fillable() && !f.read_only && f.rect.contains(page_pt))
         {
-            return ViewerAction::ActivateField(f.name.clone());
+            return ViewerAction::ActivateField(Box::new(f.clone()));
         }
     }
 
@@ -1302,6 +1428,87 @@ fn bar(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// The overlay run headless for one frame, with these input events.
+    fn frame(ctx: &egui::Context, tab: &mut Tab, events: Vec<egui::Event>) -> Option<ViewerAction> {
+        let input = egui::RawInput {
+            screen_rect: Some(ERect::from_min_size(Pos2::ZERO, vec2(1000.0, 1000.0))),
+            events,
+            ..Default::default()
+        };
+        let boxes = [(0usize, Rect::new(Vec2::new(0.0, 0.0), Vec2::new(612.0, 792.0)), quark_core::geom::PageSize::LETTER)];
+        let mut out = None;
+        let mut output = ctx.run_ui(input, |ui| {
+            out = editor(ui, &Palette::DARK, tab, &boxes, Pos2::ZERO);
+        });
+        output.textures_delta.clear();
+        out
+    }
+
+    fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    fn writing(target: crate::tab::EditTarget, text: &str) -> Tab {
+        let mut t = Tab::new(
+            1,
+            quark_pdf::doc::DocInfo::default(),
+            layout::PageMode::Continuous,
+            ZoomMode::Custom(1.0),
+        );
+        t.editing = Some(crate::tab::Editing {
+            target,
+            page: 0,
+            rect: Rect::new(Vec2::new(100.0, 600.0), Vec2::new(300.0, 620.0)),
+            text: text.into(),
+            focused: false,
+        });
+        t
+    }
+
+    #[test]
+    fn a_field_takes_the_keyboard_and_what_is_typed_is_kept_on_enter() {
+        let ctx = egui::Context::default();
+        let field = crate::tab::EditTarget::Field {
+            name: "name".into(),
+            kind: quark_pdf::forms::FieldKind::Text,
+            options: Vec::new(),
+            multiline: false,
+        };
+        let mut t = writing(field.clone(), "");
+        assert!(frame(&ctx, &mut t, Vec::new()).is_none());
+        assert!(frame(&ctx, &mut t, vec![egui::Event::Text("Ada".into())]).is_none());
+        let done = frame(&ctx, &mut t, vec![key(egui::Key::Enter, egui::Modifiers::NONE)]);
+        assert_eq!(done, Some(ViewerAction::Written { target: field, text: "Ada".into() }));
+    }
+
+    #[test]
+    fn a_note_keeps_its_lines_until_command_enter_and_escape_gives_it_up() {
+        use quark_core::annot::NoteIcon;
+        let ctx = egui::Context::default();
+        let note = Annotation::new(
+            quark_core::annot::AnnotId(1 << 48),
+            0,
+            AnnotKind::Note { icon: NoteIcon::Comment },
+            Rect::new(Vec2::new(100.0, 600.0), Vec2::new(124.0, 624.0)),
+            "me",
+        );
+        let target = crate::tab::EditTarget::New(Box::new(note));
+        let mut t = writing(target.clone(), "");
+        frame(&ctx, &mut t, Vec::new());
+        frame(&ctx, &mut t, vec![egui::Event::Text("One".into())]);
+        // Enter alone is a new line in a note, not the end of it.
+        assert!(frame(&ctx, &mut t, vec![key(egui::Key::Enter, egui::Modifiers::NONE)]).is_none());
+        frame(&ctx, &mut t, vec![egui::Event::Text("Two".into())]);
+        let done = frame(&ctx, &mut t, vec![key(egui::Key::Enter, egui::Modifiers::COMMAND)]);
+        let Some(ViewerAction::Written { text, .. }) = done else { panic!("⌘Enter keeps the note: {done:?}") };
+        assert_eq!(text.trim_end(), "One\nTwo");
+
+        let mut t = writing(target, "draft");
+        frame(&ctx, &mut t, Vec::new());
+        assert_eq!(frame(&ctx, &mut t, vec![key(egui::Key::Escape, egui::Modifiers::NONE)]), Some(ViewerAction::StopWriting));
+    }
 
     #[test]
     fn the_scroll_thumb_spans_the_track_when_nothing_overflows() {

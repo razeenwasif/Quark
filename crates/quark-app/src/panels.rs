@@ -1,7 +1,7 @@
 //! The side panels: thumbnails, bookmarks, comments, search, fields, attachments.
 
 use egui::{Color32, CornerRadius, RichText, Sense, Stroke, Ui, vec2};
-use quark_core::annot::AnnotId;
+use quark_core::annot::{AnnotId, Annotation};
 use quark_core::prefs::{Prefs, SidePanel};
 use quark_pdf::service::{PdfService, Request};
 use quark_ui::theme::{self, Palette};
@@ -28,6 +28,10 @@ pub enum PanelAction {
     RotateSelectedPages(bool),
     ExtractAttachment(usize),
     FocusField(String),
+    /// Write in an annotation, or its comment.
+    EditText(AnnotId),
+    Reply { id: AnnotId, text: String },
+    Recolor { id: AnnotId, color: quark_core::annot::Color },
 }
 
 /// Thumbnail edge length in pixels.
@@ -335,8 +339,8 @@ fn bookmarks(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
     action
 }
 
-fn comments(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
-    let all = tab.all_annotations();
+fn comments(ui: &mut Ui, p: &Palette, tab: &mut Tab) -> PanelAction {
+    let all: Vec<Annotation> = tab.all_annotations().into_iter().cloned().collect();
     if all.is_empty() {
         ui.add_space(18.0);
         ui.vertical_centered(|ui| {
@@ -425,7 +429,7 @@ fn comments(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
                                     .color(p.text_muted),
                             );
                         }
-                        if ann.thread_len() > 1 {
+                        if ann.thread_len() > 1 && !selected {
                             ui.label(
                                 RichText::new(format!("{} replies", ann.replies.len()))
                                     .font(theme::strong(11.5))
@@ -433,6 +437,11 @@ fn comments(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
                             );
                         }
                     });
+                    if selected {
+                        if let Some(a) = thread(ui, p, &ann, &mut tab.reply_draft) {
+                            action = a;
+                        }
+                    }
                 });
 
                 let response = r.response.interact(Sense::click());
@@ -440,6 +449,10 @@ fn comments(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
                     action = PanelAction::RevealAnnotation(ann.id);
                 }
                 response.context_menu(|ui| {
+                    if !ann.locked && ui.button("Edit…").clicked() {
+                        action = PanelAction::EditText(ann.id);
+                        ui.close();
+                    }
                     if ui.button("Delete comment").clicked() {
                         action = PanelAction::DeleteAnnotation(ann.id);
                         ui.close();
@@ -448,6 +461,67 @@ fn comments(ui: &mut Ui, p: &Palette, tab: &Tab) -> PanelAction {
                 ui.add_space(8.0);
             }
         });
+    action
+}
+
+/// The selected comment's thread: its replies, a reply box, its colours,
+/// and Edit and Delete.
+fn thread(ui: &mut Ui, p: &Palette, ann: &Annotation, draft: &mut String) -> Option<PanelAction> {
+    let mut action = None;
+    for r in &ann.replies {
+        egui::Frame::new()
+            .fill(p.recess)
+            .corner_radius(CornerRadius::same(9))
+            .inner_margin(egui::Margin::symmetric(9, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let who = if r.author.trim().is_empty() { "Someone" } else { r.author.as_str() };
+                    widgets::avatar(ui, p, who);
+                    ui.label(RichText::new(who).font(theme::strong(11.5)).color(p.text_muted));
+                });
+                ui.label(RichText::new(&r.contents).font(theme::body(12.0)).color(p.text));
+            });
+    }
+    if ann.locked {
+        ui.label(RichText::new("Locked").font(theme::body(11.5)).color(p.text_faint));
+        return None;
+    }
+    // ⌘↩ sends; taken before the box sees it, which would make it a new line.
+    let reply_id = ui.make_persistent_id(("quark-reply", ann.id));
+    let send = ui.memory(|m| m.has_focus(reply_id))
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+    ui.add(
+        egui::TextEdit::multiline(draft)
+            .id(reply_id)
+            .hint_text("Reply")
+            .desired_rows(1)
+            .desired_width(f32::INFINITY),
+    );
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        for c in quark_core::annot::Color::DRAW_PALETTE {
+            let c32 = Color32::from_rgb(c.r, c.g, c.b);
+            let same = (c.r, c.g, c.b) == (ann.color.r, ann.color.g, ann.color.b);
+            if widgets::swatch(ui, p, c32, same).on_hover_text("Colour").clicked() && !same {
+                action = Some(PanelAction::Recolor { id: ann.id, color: c });
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let can_reply = !draft.trim().is_empty();
+        if ui.add_enabled(can_reply, egui::Button::new("Reply")).on_hover_text("⌘↩").clicked() || (send && can_reply) {
+            action = Some(PanelAction::Reply { id: ann.id, text: draft.trim().to_string() });
+            draft.clear();
+        }
+        if ui.button("Edit").clicked() {
+            action = Some(PanelAction::EditText(ann.id));
+        }
+        if ui.button("Delete").clicked() {
+            action = Some(PanelAction::DeleteAnnotation(ann.id));
+        }
+    });
     action
 }
 
