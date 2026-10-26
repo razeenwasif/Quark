@@ -249,8 +249,8 @@ impl App {
             ) || matches!(cmd, Command::OpenRecent(_));
         };
         match cmd {
-            Command::Undo => tab.history.can_undo(),
-            Command::Redo => tab.history.can_redo(),
+            Command::Undo => tab.info.undo.is_some(),
+            Command::Redo => tab.info.redo.is_some(),
             Command::GoBack => tab.can_go_back(),
             Command::GoForward => tab.can_go_forward(),
             Command::FindNext | Command::FindPrev => !tab.search.is_empty(),
@@ -1135,16 +1135,21 @@ impl App {
                 self.save(false);
             }
             widgets::separator(ui, p);
-            let can_redo = self.tab().map(|t| t.history.can_redo()).unwrap_or(false);
-            if widgets::tool_button(ui, p, Icon::Redo, &widgets::platform_keys("Redo (Ctrl+Y)"), false, can_redo)
-                .clicked()
-            {
+            // Each says what it would do: "Undo turn page 2".
+            let redo = self.tab().and_then(|t| t.info.redo.clone());
+            let tip = match &redo {
+                Some(said) => format!("Redo {said} (Ctrl+Y)"),
+                None => "Redo (Ctrl+Y)".into(),
+            };
+            if widgets::tool_button(ui, p, Icon::Redo, &widgets::platform_keys(&tip), false, redo.is_some()).clicked() {
                 self.dispatch(Command::Redo, ctx);
             }
-            let can_undo = self.tab().map(|t| t.history.can_undo()).unwrap_or(false);
-            if widgets::tool_button(ui, p, Icon::Undo, &widgets::platform_keys("Undo (Ctrl+Z)"), false, can_undo)
-                .clicked()
-            {
+            let undo = self.tab().and_then(|t| t.info.undo.clone());
+            let tip = match &undo {
+                Some(said) => format!("Undo {said} (Ctrl+Z)"),
+                None => "Undo (Ctrl+Z)".into(),
+            };
+            if widgets::tool_button(ui, p, Icon::Undo, &widgets::platform_keys(&tip), false, undo.is_some()).clicked() {
                 self.dispatch(Command::Undo, ctx);
             }
         });
@@ -1682,10 +1687,8 @@ impl App {
                     self.open_path(&path, None);
                 }
             }
-            Command::Quit => {
-                self.quit_confirmed = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            // Closing the window asks about unsaved work, wherever it came from.
+            Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Command::Properties => {
                 if let Some(tab) = self.tab() {
                     self.dialog = Some(Dialog::Properties {
@@ -1981,7 +1984,7 @@ impl App {
                     self.dialog = Some(Dialog::Confirm {
                         title: "Delete Pages".into(),
                         body: format!(
-                            "Delete {} page(s)? This can be undone until the document is saved.",
+                            "Delete {} page(s)? Undo brings them back, even after saving.",
                             pages.len()
                         ),
                         confirm_label: "Delete".into(),
@@ -2185,16 +2188,15 @@ impl App {
             .collect()
     }
 
+    /// Take back the document's last change: its log is the worker's.
     fn undo(&mut self) {
-        let Some(tab) = self.tab_mut() else { return };
-        let Some(edit) = tab.history.undo() else { return };
-        apply_inverse(tab, &edit);
+        let Some(tab) = self.tab() else { return };
+        self.service.send(Request::Undo { id: tab.id });
     }
 
     fn redo(&mut self) {
-        let Some(tab) = self.tab_mut() else { return };
-        let Some(edit) = tab.history.redo() else { return };
-        apply_edit(tab, &edit);
+        let Some(tab) = self.tab() else { return };
+        self.service.send(Request::Redo { id: tab.id });
     }
 
     fn print(&mut self) {
@@ -2343,6 +2345,10 @@ impl App {
                 Dialog::Confirm { title, .. } if title == "Close Without Saving" => {
                     self.force_close_tab(self.active);
                 }
+                Dialog::Confirm { title, .. } if title == QUIT_UNSAVED => {
+                    self.quit_confirmed = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
                 _ => {}
             },
         }
@@ -2365,6 +2371,7 @@ impl App {
                     self.tool = Tool::Select;
                 }
             }
+            // Moved on screen as it is dragged; one change when it is let go.
             ViewerAction::MoveAnnotation { id, delta } => {
                 let mut moved_page = None;
                 if let Some(t) = self.tab_mut() {
@@ -2372,10 +2379,22 @@ impl App {
                         a.translate(delta);
                         moved_page = Some(a.page);
                     }
-                    t.dirty = true;
+                    let so_far = match t.moving {
+                        Some((was, by)) if was == id => by,
+                        _ => Vec2::ZERO,
+                    };
+                    t.moving = Some((id, so_far + delta));
                 }
                 if let Some(page) = moved_page {
                     self.textures.invalidate_page(page);
+                }
+            }
+            ViewerAction::MoveFinished(id) => {
+                let Some(t) = self.tab_mut() else { return };
+                let Some((moved, by)) = t.moving.take() else { return };
+                let pending = t.pending_annotations.iter().any(|a| a.id == id);
+                if moved == id && !pending && by.length() > 0.01 {
+                    self.apply_op(DocOp::MoveAnnotation { id, by });
                 }
             }
             ViewerAction::DeleteAnnotation(id) => {
@@ -2462,29 +2481,34 @@ impl App {
     }
 }
 
-/// Re-applies an edit to the in-memory model (redo).
-fn apply_edit(tab: &mut crate::tab::Tab, edit: &quark_core::history::Edit) {
-    use quark_core::history::Edit;
-    match edit {
-        Edit::AddAnnotation(a) => tab.pending_annotations.push((**a).clone()),
-        Edit::RemoveAnnotation(a) => {
-            tab.pending_annotations.retain(|x| x.id != a.id);
-            tab.annotations.retain(|x| x.id != a.id);
-        }
-        Edit::ModifyAnnotation { after, .. } => {
-            if let Some(x) = tab.find_annotation_mut(after.id) {
-                *x = (**after).clone();
-            }
-        }
-        // Structural edits are re-applied through the engine, not here.
-        _ => {}
-    }
-    tab.dirty = true;
-}
+/// The confirmation quitting with unsaved work puts up.
+const QUIT_UNSAVED: &str = "Quit Without Saving";
 
-/// Applies an edit's inverse (undo).
-fn apply_inverse(tab: &mut crate::tab::Tab, edit: &quark_core::history::Edit) {
-    apply_edit(tab, &edit.inverse());
+impl App {
+    /// The window asked to close — ⌘Q, the red button, Quit — with changes
+    /// not saved: kept open, and asked about first.
+    fn ask_before_quitting(&mut self, ctx: &Context) {
+        if self.quit_confirmed || !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        let unsaved: Vec<String> = self.tabs.iter().filter(|t| t.has_unsaved_changes()).map(|t| t.title()).collect();
+        if unsaved.is_empty() {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        let names = match unsaved.as_slice() {
+            [one] => format!("“{one}” has"),
+            [one, two] => format!("“{one}” and “{two}” have"),
+            [one, rest @ ..] => format!("“{one}” and {} others have", rest.len()),
+            [] => unreachable!(),
+        };
+        self.dialog = Some(Dialog::Confirm {
+            title: QUIT_UNSAVED.into(),
+            body: format!("{names} changes that are not saved. Quit anyway, and lose them?"),
+            confirm_label: "Quit Anyway".into(),
+            danger: true,
+        });
+    }
 }
 
 impl eframe::App for App {
@@ -2499,6 +2523,7 @@ impl eframe::App for App {
         self.textures.begin_frame();
         self.drain_service(ctx);
         self.drain_assistant(ctx);
+        self.ask_before_quitting(ctx);
 
         // The velvet ground: a fill, the soft light that falls on it from
         // above, and the grain. All of it is static, so Quark still idles at

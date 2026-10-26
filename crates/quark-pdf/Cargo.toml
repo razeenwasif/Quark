@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 quark-core.workspace = true
+# What a person changes, kept undoable and saved by appending to the file.
+quark-edit.workspace = true
 pdfium-render.workspace = true
 lopdf.workspace = true
 image.workspace = true
@@ -19,3 +21,6 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 rand = "0.9"
+
+[dev-dependencies]
+quark-edit = { workspace = true, features = ["fixture"] }

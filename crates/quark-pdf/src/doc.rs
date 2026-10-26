@@ -159,6 +159,18 @@ pub struct DocInfo {
     /// True when no page has extractable text, which is what a scan looks like
     /// and what makes OCR worth offering.
     pub likely_scanned: bool,
+    /// What undo would take back, and redo make again, in words; none when
+    /// there is nothing to.
+    #[serde(default)]
+    pub undo: Option<String>,
+    #[serde(default)]
+    pub redo: Option<String>,
+    /// Changed since it was opened or saved.
+    #[serde(default)]
+    pub dirty: bool,
+    /// Why it can only be read, when it cannot be changed.
+    #[serde(default)]
+    pub read_only: Option<String>,
 }
 
 impl DocInfo {

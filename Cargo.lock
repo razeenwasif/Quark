@@ -3214,6 +3214,7 @@ dependencies = [
  "parking_lot",
  "pdfium-render",
  "quark-core",
+ "quark-edit",
  "rand 0.9.5",
  "serde",
  "serde_json",

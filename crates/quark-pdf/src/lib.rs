@@ -15,6 +15,7 @@
 
 pub mod annots;
 pub mod doc;
+pub mod edits;
 pub mod engine;
 pub mod export;
 pub mod forms;

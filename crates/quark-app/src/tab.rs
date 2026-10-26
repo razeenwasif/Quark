@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use quark_core::annot::{AnnotId, Annotation};
 use quark_core::geom::{Rect, Rot, Vec2};
-use quark_core::history::History;
 use quark_core::layout::{self, Layout, LayoutParams, PageMode, ZoomMode};
 use quark_core::search::SearchState;
 use quark_pdf::doc::DocInfo;
@@ -114,7 +113,9 @@ pub struct Tab {
     pub selected_pages: Vec<usize>,
     pub drafting: Drafting,
     pub search: SearchState,
-    pub history: History,
+    /// An annotation being dragged, and how far it has gone: one change
+    /// when it is let go.
+    pub moving: Option<(AnnotId, Vec2)>,
 
     // --- navigation history, for Previous/Next View ---
     back_stack: Vec<ViewPosition>,
@@ -122,9 +123,9 @@ pub struct Tab {
 
     /// Bumped whenever the view changes, so stale renders can be discarded.
     pub render_token: u64,
-    /// Set when the document differs from the file on disk.
-    pub dirty: bool,
-    /// Annotations created in this session that have not been written yet.
+    /// Redaction marks waiting to be applied: not comments of their own,
+    /// so they are kept here rather than in the document. Every other
+    /// annotation is a change to the document as soon as it is made.
     pub pending_annotations: Vec<Annotation>,
     next_annot_id: u64,
 }
@@ -165,13 +166,14 @@ impl Tab {
             selected_pages: Vec::new(),
             drafting: Drafting::None,
             search: SearchState::default(),
-            history: History::default(),
+            moving: None,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
             render_token: 1,
-            dirty: false,
             pending_annotations: Vec::new(),
-            next_annot_id: 1,
+            // Far above any object number, so a mark made here never
+            // shares an id with an annotation read from the document.
+            next_annot_id: 1 << 48,
         }
     }
 
@@ -432,7 +434,7 @@ impl Tab {
 
     /// Whether there is anything unsaved.
     pub fn has_unsaved_changes(&self) -> bool {
-        self.dirty || !self.pending_annotations.is_empty() || self.history.is_dirty()
+        self.info.dirty || !self.pending_annotations.is_empty()
     }
 }
 

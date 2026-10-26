@@ -17,12 +17,13 @@
 //! fast scroll from being followed by a burst of now-useless page images.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
-use quark_core::annot::Annotation;
-use quark_core::geom::{PageSize, Rot};
+use quark_core::annot::{AnnotId, Annotation, Color};
+use quark_core::geom::{PageSize, Rot, Vec2};
+use quark_edit::{Doc as Edit, Op, Opened};
 use quark_core::prefs::PageTint;
 use quark_core::search::{SearchHit, SearchOptions};
 
@@ -54,7 +55,13 @@ pub enum DocOp {
     CropPages { pages: Vec<usize>, box_: [f32; 4] },
     SetMetadata(Box<Metadata>),
     AddAnnotations(Vec<Annotation>),
-    RemoveAnnotations(Vec<usize>),
+    RemoveAnnotations(Vec<AnnotId>),
+    /// An annotation moved by `by`, in the page's points.
+    MoveAnnotation { id: AnnotId, by: Vec2 },
+    /// An annotation recoloured, or what it says changed.
+    EditAnnotation { id: AnnotId, color: Option<Color>, contents: Option<String> },
+    /// An answer to an annotation, by `author`.
+    ReplyTo { id: AnnotId, text: String, author: String },
     SetOutline(Vec<Bookmark>),
     StampText { pages: Vec<usize>, stamp: Box<TextStamp> },
     ApplyBates { pages: Vec<usize>, options: Box<BatesOptions> },
@@ -65,6 +72,10 @@ pub enum DocOp {
     Optimize,
     SetFieldText { name: String, value: String },
     SetFieldCheck { name: String, checked: bool },
+    /// A field set to a choice, or a button group to one of its states.
+    SetFieldValue { name: String, value: String },
+    /// The form drawn into its pages for good.
+    FlattenForm,
     ClearForm,
 }
 
@@ -83,6 +94,9 @@ impl DocOp {
             DocOp::SetMetadata(_) => "Change properties".into(),
             DocOp::AddAnnotations(a) => format!("Add {} annotation(s)", a.len()),
             DocOp::RemoveAnnotations(_) => "Remove annotations".into(),
+            DocOp::MoveAnnotation { .. } => "Move annotation".into(),
+            DocOp::EditAnnotation { .. } => "Edit annotation".into(),
+            DocOp::ReplyTo { .. } => "Reply".into(),
             DocOp::SetOutline(_) => "Edit bookmarks".into(),
             DocOp::StampText { .. } => "Add watermark".into(),
             DocOp::ApplyBates { .. } => "Add Bates numbering".into(),
@@ -93,6 +107,8 @@ impl DocOp {
             DocOp::Optimize => "Reduce file size".into(),
             DocOp::SetFieldText { name, .. } => format!("Fill \"{name}\""),
             DocOp::SetFieldCheck { name, .. } => format!("Toggle \"{name}\""),
+            DocOp::SetFieldValue { name, .. } => format!("Fill \"{name}\""),
+            DocOp::FlattenForm => "Flatten form".into(),
             DocOp::ClearForm => "Clear form".into(),
         }
     }
@@ -163,6 +179,13 @@ pub enum Request {
     Apply {
         id: DocId,
         op: Box<DocOp>,
+    },
+    /// Take back the last change, or make again the last taken back.
+    Undo {
+        id: DocId,
+    },
+    Redo {
+        id: DocId,
     },
     Save {
         id: DocId,
@@ -352,11 +375,12 @@ fn worker(rx: Receiver<Request>, tx: Sender<Response>) {
     }
 
     let mut docs: HashMap<DocId, Document> = HashMap::new();
+    let mut edits: Edits = HashMap::new();
 
     while let Ok(req) = rx.recv() {
         match req {
             Request::Shutdown => break,
-            other => handle(other, &mut docs, &tx),
+            other => handle(other, &mut docs, &mut edits, &tx),
         }
     }
     tracing::debug!("PDF worker stopped");
@@ -371,14 +395,51 @@ fn fail(tx: &Sender<Response>, id: DocId, what: &str, error: impl std::fmt::Disp
     });
 }
 
-fn handle(req: Request, docs: &mut HashMap<DocId, Document>, tx: &Sender<Response>) {
+/// What has been changed in each document: `quark-edit`'s document, its
+/// log of changes and what saving writes — or why the document can only be
+/// read. PDFium draws what it says.
+type Edits = HashMap<DocId, Result<Box<Edit>, String>>;
+
+/// `info` told what can be undone and redone, and whether there are changes.
+fn told(mut info: DocInfo, edit: Option<&Result<Box<Edit>, String>>) -> DocInfo {
+    match edit {
+        Some(Ok(edit)) => {
+            info.undo = edit.undoable();
+            info.redo = edit.redoable();
+            info.dirty = edit.dirty();
+            info.read_only = None;
+        }
+        Some(Err(why)) => {
+            info.undo = None;
+            info.redo = None;
+            info.dirty = false;
+            info.read_only = Some(why.clone());
+        }
+        None => {}
+    }
+    info
+}
+
+/// The file read to be changed, with the password it was opened with.
+fn editable(path: &Path, password: Option<&str>) -> Result<Box<Edit>, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("it could not be read again: {e}"))?;
+    match Edit::open_with(std::sync::Arc::new(bytes), password) {
+        Opened::Editable(edit) => Ok(edit),
+        Opened::ReadOnly(why) => Err(why),
+        Opened::Locked { .. } => Err("its password does not open it to be changed".into()),
+    }
+}
+
+fn handle(req: Request, docs: &mut HashMap<DocId, Document>, edits: &mut Edits, tx: &Sender<Response>) {
     match req {
         Request::Shutdown => {}
 
         Request::Open { id, path, password } => match Document::open(&path, password.as_deref()) {
             Ok(doc) => {
-                let info = Box::new(doc.info.clone());
+                let edit = editable(&path, password.as_deref());
+                let info = Box::new(told(doc.info.clone(), Some(&edit)));
                 docs.insert(id, doc);
+                edits.insert(id, edit);
                 let _ = tx.send(Response::Opened { id, info });
             }
             Err(OpenError::PasswordRequired) => {
@@ -400,6 +461,7 @@ fn handle(req: Request, docs: &mut HashMap<DocId, Document>, tx: &Sender<Respons
 
         Request::Close { id } => {
             docs.remove(&id);
+            edits.remove(&id);
         }
 
         Request::Render { id, request, token } => {
@@ -479,6 +541,13 @@ fn handle(req: Request, docs: &mut HashMap<DocId, Document>, tx: &Sender<Respons
         }
 
         Request::ReadAnnotations { id } => {
+            // Read from the document of record, named by object: what a
+            // change names them by, whatever has changed since.
+            if let Some(Ok(edit)) = edits.get(&id) {
+                let annotations = crate::edits::annotations(edit.document());
+                let _ = tx.send(Response::Annotations { id, annotations });
+                return;
+            }
             let Some(doc) = docs.get(&id) else { return };
             match crate::annots::read_all(doc) {
                 Ok(annotations) => {
@@ -540,17 +609,43 @@ fn handle(req: Request, docs: &mut HashMap<DocId, Document>, tx: &Sender<Respons
             }
         }
 
-        Request::Apply { id, op } => apply_op(id, *op, docs, tx),
+        Request::Apply { id, op } => apply_op(id, *op, docs, edits, tx),
+
+        Request::Undo { id } | Request::Redo { id } => {
+            let undo = matches!(req, Request::Undo { .. });
+            let Some(Ok(edit)) = edits.get_mut(&id) else { return };
+            let said = if undo { edit.undo() } else { edit.redo() };
+            match said {
+                Ok(Some(said)) => {
+                    let label = if undo { format!("Undid {said}") } else { format!("Redid {said}") };
+                    reload(id, label, docs, edits, tx, None, None);
+                }
+                Ok(None) => {}
+                Err(e) => fail(tx, id, if undo { "undo" } else { "redo" }, e),
+            }
+        }
 
         Request::Save { id, path } => {
             let Some(doc) = docs.get_mut(&id) else { return };
-            let result = match &path {
-                Some(p) => doc.save_as(p),
-                None => doc.save(),
+            let target = path.clone().or_else(|| doc.path().map(Path::to_path_buf));
+            // The changes appended to the file where they can be, written
+            // whole where they cannot: `quark-edit`'s save. A file that can
+            // only be read is saved as PDFium has it.
+            let result = match (edits.get_mut(&id), &target) {
+                (Some(Ok(edit)), Some(target)) => edit.save(target).map_err(|e| e.to_string()),
+                (Some(Ok(_)), None) => Err("say where to save it".to_string()),
+                _ => match &path {
+                    Some(p) => doc.save_as(p).map_err(|e| e.to_string()),
+                    None => doc.save().map_err(|e| e.to_string()),
+                },
             };
             match result {
                 Ok(()) => {
+                    if let Some(target) = &target {
+                        doc.set_path(target.clone());
+                    }
                     let saved = doc.path().map(Path::to_path_buf).unwrap_or_default();
+                    doc.info = told(doc.info.clone(), edits.get(&id));
                     let _ = tx.send(Response::Saved { id, path: saved });
                 }
                 Err(e) => fail(tx, id, "save", e),
@@ -588,175 +683,235 @@ fn handle(req: Request, docs: &mut HashMap<DocId, Document>, tx: &Sender<Respons
     }
 }
 
-use std::path::Path;
+/// The seconds since 1970.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
-/// Applies a structural operation and reloads the document.
-///
-/// Every operation goes out to bytes and back, because that is the only way the
-/// lopdf and PDFium halves of the engine can both see the change. The reload is
-/// also what keeps `DocInfo` honest after the page tree moves.
-fn apply_op(id: DocId, op: DocOp, docs: &mut HashMap<DocId, Document>, tx: &Sender<Response>) {
-    let Some(doc) = docs.get(&id) else { return };
+/// What Quark's own code makes of the document as it is now, as one change:
+/// `whole` when what it took out must not stay in the file's earlier bytes.
+fn remade(
+    edit: &Edit,
+    label: &str,
+    whole: bool,
+    f: impl FnOnce(&[u8]) -> Result<Vec<u8>, crate::engine::EngineError>,
+) -> Result<Op, String> {
+    let bytes = edit.view_bytes()?;
+    let out = f(&bytes).map_err(|e| e.to_string())?;
+    Ok(Op::Remade { said: label.to_lowercase(), bytes: std::sync::Arc::new(out), whole })
+}
+
+/// Several changes as one, or the one.
+fn one(label: &str, mut ops: Vec<Op>) -> Result<Op, String> {
+    match ops.len() {
+        0 => Err("there was nothing to change".into()),
+        1 => Ok(ops.remove(0)),
+        _ => Ok(Op::Many { said: label.to_lowercase(), ops }),
+    }
+}
+
+/// Makes a change, in `quark-edit`'s log, where it is undone and saved — as
+/// its own operation where it has one, otherwise as the whole document
+/// Quark's own code remade — and has PDFium draw what it made.
+fn apply_op(id: DocId, op: DocOp, docs: &mut HashMap<DocId, Document>, edits: &mut Edits, tx: &Sender<Response>) {
     let label = op.label();
-
-    let bytes = match doc.to_bytes() {
-        Ok(b) => b,
-        Err(e) => return fail(tx, id, &label, e),
+    let Some(doc) = docs.get(&id) else { return };
+    let edit = match edits.get(&id) {
+        Some(Ok(edit)) => edit,
+        Some(Err(why)) => return fail(tx, id, &label, format!("it can only be read: {why}")),
+        None => return,
     };
-    let path = doc.path().map(Path::to_path_buf);
-    let filename = path
-        .as_ref()
+    let filename = doc
+        .path()
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let password = doc.password().map(str::to_owned);
-
+    let secs = now();
+    let date = quark_edit::annot::date(secs);
+    let pages_of = |p: &[usize]| p.iter().map(|i| *i as u32 + 1).collect::<Vec<u32>>();
     let mut redaction = None;
     let mut sanitize = None;
 
-    let result: Result<Vec<u8>, crate::engine::EngineError> = match op {
-        DocOp::DeletePages(p) => crate::organize::delete_pages(&bytes, &p),
-        DocOp::MovePage { from, to } => crate::organize::move_page(&bytes, from, to),
-        DocOp::ReorderPages(o) => crate::organize::reorder_pages(&bytes, &o),
-        DocOp::RotatePages { pages, by } => crate::organize::rotate_pages(&bytes, &pages, by),
-        DocOp::ExtractPages(p) => crate::organize::extract_pages(&bytes, &p),
-        DocOp::InsertPagesFromFile { path, at } => match std::fs::read(&path) {
-            Ok(src) => crate::organize::insert_pages(&bytes, &src, at),
-            Err(e) => Err(crate::engine::EngineError::Pdfium(format!(
-                "could not read {}: {e}",
-                path.display()
-            ))),
-        },
-        DocOp::InsertBlankPage { at, size } => {
-            // Built as a one-page document and spliced in, which reuses the
-            // insert path rather than duplicating page-tree surgery.
-            match Document::create_blank(size).and_then(|d| {
-                d.to_bytes()
-                    .map_err(|e| OpenError::Engine(e))
-            }) {
-                Ok(blank) => crate::organize::insert_pages(&bytes, &blank, at),
-                Err(e) => Err(crate::engine::EngineError::Pdfium(e.to_string())),
-            }
+    let made: Result<Op, String> = match op {
+        DocOp::DeletePages(p) => Ok(Op::Delete { pages: pages_of(&p) }),
+        DocOp::RotatePages { pages, by } => Ok(Op::Rotate { pages: pages_of(&pages), by: by.degrees() }),
+        DocOp::InsertPagesFromFile { path, at } => std::fs::read(&path)
+            .map_err(|e| format!("could not read {}: {e}", path.display()))
+            .map(|bytes| Op::InsertFrom {
+                after: at as u32,
+                name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                bytes: std::sync::Arc::new(bytes),
+                pages: None,
+            }),
+        DocOp::SetMetadata(m) => Ok(Op::SetInfo {
+            title: m.title.clone(),
+            author: m.author.clone(),
+            subject: m.subject.clone(),
+            keywords: m.keywords.clone(),
+            date: date.clone(),
+        }),
+        DocOp::AddAnnotations(list) => one(
+            &label,
+            list.iter()
+                .filter_map(|a| {
+                    crate::edits::mark_of(a).map(|mark| Op::Comment {
+                        page: a.page as u32 + 1,
+                        mark,
+                        author: a.author.clone(),
+                        date: date.clone(),
+                        name: format!("quark-{secs}-{}", a.id.0),
+                    })
+                })
+                .collect(),
+        ),
+        DocOp::RemoveAnnotations(ids) => one(
+            &label,
+            ids.iter().map(|id| Op::DeleteComment { id: crate::edits::comment_id(*id) }).collect(),
+        ),
+        DocOp::MoveAnnotation { id, by } => {
+            Ok(Op::MoveComment { id: crate::edits::comment_id(id), by: [by.x, by.y] })
         }
-        DocOp::CropPages { pages, box_ } => crate::organize::crop_pages(&bytes, &pages, box_),
-        DocOp::SetMetadata(m) => crate::organize::set_metadata(&bytes, &m),
-        DocOp::AddAnnotations(a) => crate::organize::apply_annotations(&bytes, &a),
-        DocOp::RemoveAnnotations(pages) => crate::organize::remove_annotations(&bytes, &pages),
-        DocOp::SetOutline(b) => crate::outline::write_outline(&bytes, &b),
+        DocOp::EditAnnotation { id, color, contents } => Ok(Op::EditComment {
+            id: crate::edits::comment_id(id),
+            color: color.map(crate::edits::hex),
+            text: contents,
+            date: date.clone(),
+        }),
+        DocOp::ReplyTo { id, text, author } => Ok(Op::Reply {
+            to: crate::edits::comment_id(id),
+            text,
+            author,
+            date: date.clone(),
+            name: format!("quark-reply-{secs}"),
+        }),
+        DocOp::SetFieldText { name, value } | DocOp::SetFieldValue { name, value } => {
+            Ok(Op::SetField { name, value })
+        }
+        // A box is ticked by its own "on" state, whatever the form calls it.
+        DocOp::SetFieldCheck { name, checked } => {
+            let on = edit
+                .fields()
+                .into_iter()
+                .find(|f| f.name == name)
+                .and_then(|f| f.widgets.into_iter().find_map(|w| w.state))
+                .unwrap_or_else(|| "Yes".into());
+            Ok(Op::SetField { name, value: if checked { on } else { "Off".into() } })
+        }
+        DocOp::FlattenForm => Ok(Op::Flatten),
+        DocOp::ClearForm => one(
+            &label,
+            edit.fields()
+                .into_iter()
+                .filter(|f| !f.read_only && f.kind != "button" && f.kind != "signature" && !f.value.is_empty())
+                .map(|f| Op::SetField { name: f.name, value: String::new() })
+                .collect(),
+        ),
+        DocOp::Encrypt { user, owner, permissions } => Ok(Op::Protect {
+            protection: quark_edit::security::Protection {
+                user,
+                owner,
+                print: permissions.print,
+                copy: permissions.copy,
+                edit: permissions.modify,
+            },
+        }),
+        DocOp::Decrypt { .. } => Ok(Op::Unprotect),
+        DocOp::Optimize => Ok(Op::Compress),
+        DocOp::MovePage { from, to } => {
+            remade(edit, &label, false, |b| crate::organize::move_page(b, from, to))
+        }
+        DocOp::ReorderPages(o) => remade(edit, &label, false, |b| crate::organize::reorder_pages(b, &o)),
+        DocOp::ExtractPages(p) => remade(edit, &label, false, |b| crate::organize::extract_pages(b, &p)),
+        // Built as a one-page document and spliced in, at the size asked.
+        DocOp::InsertBlankPage { at, size } => remade(edit, &label, false, |b| {
+            let blank = Document::create_blank(size)
+                .and_then(|d| d.to_bytes().map_err(OpenError::Engine))
+                .map_err(|e| crate::engine::EngineError::Pdfium(e.to_string()))?;
+            crate::organize::insert_pages(b, &blank, at)
+        }),
+        DocOp::CropPages { pages, box_ } => {
+            remade(edit, &label, false, |b| crate::organize::crop_pages(b, &pages, box_))
+        }
+        DocOp::SetOutline(b) => remade(edit, &label, false, |bytes| crate::outline::write_outline(bytes, &b)),
         DocOp::StampText { pages, stamp } => {
-            crate::export::stamp_text(&bytes, &pages, &stamp, &filename)
+            remade(edit, &label, false, |b| crate::export::stamp_text(b, &pages, &stamp, &filename))
         }
         DocOp::ApplyBates { pages, options } => {
-            crate::export::apply_bates(&bytes, &pages, &options)
+            remade(edit, &label, false, |b| crate::export::apply_bates(b, &pages, &options))
         }
+        // What is redacted must not stay in the file's earlier bytes: saved whole.
         DocOp::ApplyRedactions(marks) => match crate::security::apply_redactions(doc, &marks) {
             Ok((out, report)) => {
                 redaction = Some(report);
-                Ok(out)
+                Ok(Op::Remade { said: label.to_lowercase(), bytes: std::sync::Arc::new(out), whole: true })
             }
-            Err(e) => Err(e),
+            Err(e) => Err(e.to_string()),
         },
-        DocOp::Sanitize(opts) => match crate::security::sanitize(&bytes, opts) {
+        DocOp::Sanitize(opts) => match edit.view_bytes().and_then(|b| {
+            crate::security::sanitize(&b, opts).map_err(|e| e.to_string())
+        }) {
             Ok((out, report)) => {
                 sanitize = Some(report);
-                Ok(out)
+                Ok(Op::Remade { said: label.to_lowercase(), bytes: std::sync::Arc::new(out), whole: true })
             }
             Err(e) => Err(e),
         },
-        DocOp::Encrypt {
-            user,
-            owner,
-            permissions,
-        } => crate::security::encrypt(&bytes, &user, &owner, permissions),
-        DocOp::Decrypt { password } => crate::security::decrypt(&bytes, &password),
-        DocOp::Optimize => crate::organize::optimize(&bytes),
-
-        // Form edits act on the live document rather than the byte pipeline,
-        // because PDFium owns the field values and regenerates appearances.
-        DocOp::SetFieldText { name, value } => {
-            let Some(doc) = docs.get_mut(&id) else { return };
-            match crate::forms::set_text_value(doc, &name, &value) {
-                Ok(()) => {
-                    doc.refresh_info();
-                    let _ = tx.send(Response::Applied {
-                        id,
-                        label,
-                        info: Box::new(doc.info.clone()),
-                        redaction: None,
-                        sanitize: None,
-                    });
-                }
-                Err(e) => fail(tx, id, "fill field", e),
-            }
-            return;
-        }
-        DocOp::SetFieldCheck { name, checked } => {
-            let Some(doc) = docs.get_mut(&id) else { return };
-            match crate::forms::set_checkbox(doc, &name, checked) {
-                Ok(()) => {
-                    doc.refresh_info();
-                    let _ = tx.send(Response::Applied {
-                        id,
-                        label,
-                        info: Box::new(doc.info.clone()),
-                        redaction: None,
-                        sanitize: None,
-                    });
-                }
-                Err(e) => fail(tx, id, "toggle field", e),
-            }
-            return;
-        }
-        DocOp::ClearForm => {
-            let Some(doc) = docs.get_mut(&id) else { return };
-            match crate::forms::clear_form(doc) {
-                Ok(_) => {
-                    doc.refresh_info();
-                    let _ = tx.send(Response::Applied {
-                        id,
-                        label,
-                        info: Box::new(doc.info.clone()),
-                        redaction: None,
-                        sanitize: None,
-                    });
-                }
-                Err(e) => fail(tx, id, "clear form", e),
-            }
-            return;
-        }
     };
 
-    let new_bytes = match result {
-        Ok(b) => b,
+    let op = match made {
+        Ok(op) => op,
         Err(e) => return fail(tx, id, &label, e),
     };
+    let Some(Ok(edit)) = edits.get_mut(&id) else { return };
+    if let Err(e) = edit.apply(op) {
+        return fail(tx, id, &label, e);
+    }
+    if !reload(id, label.clone(), docs, edits, tx, redaction, sanitize) {
+        // PDFium would not draw what the change made: it is taken back.
+        if let Some(Ok(edit)) = edits.get_mut(&id) {
+            let _ = edit.undo();
+        }
+    }
+}
 
-    // Encryption changes which password opens the file, so the newly written
-    // bytes must be reopened with the one that was just set, not the old one.
-    let reopen_password = match &label {
-        l if l == "Encrypt" => None,
-        _ => password,
+/// Has PDFium draw the document as its changes have made it, and says so.
+/// Whether it could.
+fn reload(
+    id: DocId,
+    label: String,
+    docs: &mut HashMap<DocId, Document>,
+    edits: &Edits,
+    tx: &Sender<Response>,
+    redaction: Option<RedactionReport>,
+    sanitize: Option<SanitizeReport>,
+) -> bool {
+    let Some(Ok(edit)) = edits.get(&id) else { return false };
+    let bytes = match edit.view_bytes() {
+        Ok(b) => b,
+        Err(e) => {
+            fail(tx, id, &label, e);
+            return false;
+        }
     };
-
-    match Document::from_bytes(new_bytes, reopen_password.as_deref()) {
+    let path = docs.get(&id).and_then(|d| d.path().map(Path::to_path_buf));
+    match Document::from_bytes(bytes, None) {
         Ok(mut reloaded) => {
             if let Some(p) = path {
                 reloaded.set_path(p);
             }
+            reloaded.info = told(reloaded.info.clone(), edits.get(&id));
             let info = Box::new(reloaded.info.clone());
             docs.insert(id, reloaded);
-            let _ = tx.send(Response::Applied {
-                id,
-                label,
-                info,
-                redaction,
-                sanitize,
-            });
+            let _ = tx.send(Response::Applied { id, label, info, redaction, sanitize });
+            true
         }
-        // The operation produced something PDFium will not open. The original
-        // document is still in the map untouched, so the user loses the edit
-        // rather than the file.
-        Err(e) => fail(tx, id, &label, e),
+        Err(e) => {
+            fail(tx, id, &label, e);
+            false
+        }
     }
 }
 
@@ -1042,6 +1197,111 @@ mod tests {
         });
         assert_eq!(anns.len(), 1);
         assert_eq!(anns[0].author, "svc");
+    }
+
+    /// The next `Applied`'s document state.
+    fn applied(svc: &PdfService) -> DocInfo {
+        wait_for(svc, |r| match r {
+            Response::Applied { info, .. } => Some((**info).clone()),
+            _ => None,
+        })
+    }
+
+    fn annotations(svc: &PdfService, id: DocId) -> Vec<Annotation> {
+        svc.send(Request::ReadAnnotations { id });
+        wait_for(svc, |r| match r {
+            Response::Annotations { annotations, .. } => Some(annotations.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn every_change_is_undone_and_redone_and_saving_appends_to_the_file() {
+        let _g = testutil::pdfium_guard();
+        use quark_core::annot::{AnnotKind, NoteIcon};
+        use quark_core::geom::Rect;
+
+        // A copy of the sample, so saving writes a file of the test's own.
+        let path = testutil::tmp_path("svc-undo.pdf");
+        std::fs::write(&path, std::fs::read(testutil::sample_pdf()).unwrap()).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let svc = PdfService::start();
+        let id = svc.new_doc_id();
+        svc.send(Request::Open { id, path: path.clone(), password: None });
+        let info = wait_for(&svc, |r| match r {
+            Response::Opened { info, .. } => Some((**info).clone()),
+            _ => None,
+        });
+        assert!(!info.dirty && info.undo.is_none() && info.read_only.is_none(), "{info:?}");
+
+        let mut note = Annotation::new(AnnotId(1), 0, AnnotKind::Note { icon: NoteIcon::Comment }, Rect::from_xywh(100.0, 600.0, 24.0, 24.0), "Ada");
+        note.contents = "Look".into();
+        svc.send(Request::Apply { id, op: Box::new(DocOp::AddAnnotations(vec![note])) });
+        let info = applied(&svc);
+        assert!(info.dirty && info.undo.as_deref() == Some("add a note"), "{info:?}");
+        svc.send(Request::Apply { id, op: Box::new(DocOp::RotatePages { pages: vec![1], by: Rot::D90 }) });
+        let info = applied(&svc);
+        assert_eq!(info.pages[1].rotation, Rot::D90);
+        assert_eq!(info.undo.as_deref(), Some("turn page 2"));
+
+        // Undone and redone, in order, and drawn so by PDFium each time.
+        svc.send(Request::Undo { id });
+        let info = applied(&svc);
+        assert_eq!(info.pages[1].rotation, Rot::D0);
+        assert_eq!(info.redo.as_deref(), Some("turn page 2"));
+        svc.send(Request::Undo { id });
+        let info = applied(&svc);
+        assert!(!info.dirty && info.undo.is_none());
+        assert!(annotations(&svc, id).is_empty());
+        svc.send(Request::Redo { id });
+        applied(&svc);
+        let notes = annotations(&svc, id);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].contents, "Look");
+
+        // Saved by appending: the file's first bytes are kept, and it opens
+        // with its note.
+        svc.send(Request::Save { id, path: None });
+        wait_for(&svc, |r| matches!(r, Response::Saved { .. }).then_some(()));
+        let saved = std::fs::read(&path).unwrap();
+        assert!(saved.len() > original.len() && saved.starts_with(&original), "the original bytes were rewritten");
+        let reopened = svc.new_doc_id();
+        svc.send(Request::Open { id: reopened, path: path.clone(), password: None });
+        wait_for(&svc, |r| matches!(r, Response::Opened { .. }).then_some(()));
+        assert_eq!(annotations(&svc, reopened).len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_comment_deleted_or_moved_by_its_id_stays_so_and_two_never_share_one() {
+        let _g = testutil::pdfium_guard();
+        use quark_core::annot::AnnotKind;
+        use quark_core::geom::Rect;
+
+        let svc = PdfService::start();
+        let id = open_sample(&svc);
+        let square = |x: f32| Annotation::new(AnnotId(1), 0, AnnotKind::Square, Rect::from_xywh(x, 500.0, 40.0, 40.0), "Ada");
+        svc.send(Request::Apply { id, op: Box::new(DocOp::AddAnnotations(vec![square(100.0), square(200.0)])) });
+        let info = applied(&svc);
+        assert_eq!(info.undo.as_deref(), Some("add 2 annotation(s)"), "two made at once are one step");
+        let two = annotations(&svc, id);
+        assert_eq!(two.len(), 2);
+        assert_ne!(two[0].id, two[1].id, "both were made with id 1; read back, each has its own");
+
+        svc.send(Request::Apply { id, op: Box::new(DocOp::MoveAnnotation { id: two[1].id, by: Vec2::new(10.0, -20.0) }) });
+        applied(&svc);
+        let moved = annotations(&svc, id);
+        assert!((moved[1].rect.min.x - (two[1].rect.min.x + 10.0)).abs() < 0.01);
+        assert!((moved[1].rect.min.y - (two[1].rect.min.y - 20.0)).abs() < 0.01);
+
+        svc.send(Request::Apply { id, op: Box::new(DocOp::RemoveAnnotations(vec![two[0].id])) });
+        applied(&svc);
+        // Read again after another change: still gone.
+        svc.send(Request::Apply { id, op: Box::new(DocOp::RotatePages { pages: vec![0], by: Rot::D90 }) });
+        applied(&svc);
+        let left = annotations(&svc, id);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, two[1].id);
     }
 
     #[test]

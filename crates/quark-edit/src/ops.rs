@@ -53,6 +53,10 @@ pub enum Op {
     },
     /// A comment, and its replies, deleted.
     DeleteComment { id: String },
+    /// A comment moved by `by`, in the page's points.
+    MoveComment { id: String, by: [f32; 2] },
+    /// Several changes made as one: undone together.
+    Many { said: String, ops: Vec<Op> },
     /// A form's field filled in.
     SetField { name: String, value: String },
     /// The form drawn into its pages for good.
@@ -122,6 +126,8 @@ impl Op {
             Op::Reply { .. } => "reply".into(),
             Op::EditComment { .. } => "edit a comment".into(),
             Op::DeleteComment { .. } => "delete a comment".into(),
+            Op::MoveComment { .. } => "move a comment".into(),
+            Op::Many { said, .. } => said.clone(),
             Op::SetField { name, .. } => format!("fill in {name}"),
             Op::Flatten => "flatten the form".into(),
             Op::SetInfo { .. } => "change its properties".into(),
@@ -154,7 +160,7 @@ impl Op {
                 | Op::Flatten
                 | Op::Ocr { .. }
                 | Op::Remade { .. }
-        )
+        ) || matches!(self, Op::Many { ops, .. } if ops.iter().any(Op::reshapes))
     }
 
     pub fn incremental(&self) -> bool {
@@ -167,7 +173,9 @@ impl Op {
             Op::Comment { .. }
             | Op::Reply { .. }
             | Op::EditComment { .. }
-            | Op::DeleteComment { .. } => true,
+            | Op::DeleteComment { .. }
+            | Op::MoveComment { .. } => true,
+            Op::Many { ops, .. } => ops.iter().all(Op::incremental),
             Op::SetField { .. } | Op::Flatten | Op::SetInfo { .. } | Op::Ocr { .. } => true,
             // Appended, these would leave what they change in the bytes before.
             Op::Protect { .. } | Op::Unprotect | Op::Sanitize | Op::Compress => false,
@@ -249,6 +257,13 @@ impl Op {
                 date,
             ),
             Op::DeleteComment { id } => annot::delete(doc, annot::object_of(id)?),
+            Op::MoveComment { id, by } => annot::shift(doc, annot::object_of(id)?, *by),
+            Op::Many { ops, .. } => {
+                for op in ops {
+                    op.apply(doc)?;
+                }
+                Ok(())
+            }
             Op::SetField { name, value } => crate::forms::set(doc, name, value),
             Op::Flatten => crate::forms::flatten(doc).map(|_| ()),
             Op::SetInfo {

@@ -842,6 +842,47 @@ pub fn edit(
 }
 
 /// Delete a comment, and the replies to it.
+/// Move a comment by `by`, in the page's points: its box and every point it
+/// has. Its appearance is drawn into its box wherever that is, so it moves
+/// with it unchanged.
+pub fn shift(doc: &mut Document, id: ObjectId, by: [f32; 2]) -> Result<(), String> {
+    let dict = doc
+        .get_object_mut(id)
+        .and_then(Object::as_dict_mut)
+        .map_err(|_| "there is no such comment".to_string())?;
+    if dict.get(b"Subtype").and_then(Object::as_name).is_err() {
+        return Err("there is no such comment".into());
+    }
+    // Arrays of x, y pairs, moved pair by pair; InkList's are arrays of them.
+    let moved = |items: &[Object]| -> Vec<Object> {
+        items
+            .iter()
+            .enumerate()
+            .map(|(i, v)| match v.as_float() {
+                Ok(f) => Object::Real(f + by[i % 2]),
+                Err(_) => v.clone(),
+            })
+            .collect()
+    };
+    for key in [b"Rect".as_slice(), b"QuadPoints", b"L", b"Vertices", b"CL"] {
+        if let Ok(Object::Array(items)) = dict.get(key) {
+            let shifted = moved(items);
+            dict.set(key, shifted);
+        }
+    }
+    if let Ok(Object::Array(strokes)) = dict.get(b"InkList") {
+        let shifted: Vec<Object> = strokes
+            .iter()
+            .map(|s| match s {
+                Object::Array(points) => Object::Array(moved(points)),
+                other => other.clone(),
+            })
+            .collect();
+        dict.set("InkList", shifted);
+    }
+    Ok(())
+}
+
 pub fn delete(doc: &mut Document, id: ObjectId) -> Result<(), String> {
     let page = doc
         .get_object(id)
@@ -1348,4 +1389,24 @@ mod tests {
             "one corner is not a polygon"
         );
     }
+
+    #[test]
+    fn a_comment_moves_with_everything_it_points_at() {
+        let mut d = doc();
+        let ink = add(&mut d, 1, &Mark { strokes: vec![vec![[100.0, 100.0], [120.0, 130.0]]], ..mark("ink") }, "Ada", "D:", "i").unwrap();
+        let line = add(&mut d, 1, &Mark { rect: Some([10.0, 10.0, 50.0, 60.0]), ..mark("arrow") }, "Ada", "D:", "l").unwrap();
+        shift(&mut d, ink, [5.0, -10.0]).unwrap();
+        shift(&mut d, line, [1.0, 2.0]).unwrap();
+        let get = |id, key: &[u8]| -> Vec<f32> {
+            d.get_object(id).unwrap().as_dict().unwrap().get(key).unwrap().as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect()
+        };
+        let stroke: Vec<f32> = d.get_object(ink).unwrap().as_dict().unwrap().get(b"InkList").unwrap().as_array().unwrap()[0]
+            .as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect();
+        assert_eq!(stroke, [105.0, 90.0, 125.0, 120.0]);
+        assert_eq!(get(line, b"L"), [11.0, 12.0, 51.0, 62.0]);
+        let rect = get(ink, b"Rect");
+        assert!((rect[0] - 103.0).abs() < 0.01 && (rect[1] - 88.0).abs() < 0.01, "{rect:?}");
+        assert!(shift(&mut d, (999, 0), [1.0, 1.0]).is_err());
+    }
+
 }

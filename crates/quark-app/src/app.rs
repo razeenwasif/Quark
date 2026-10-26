@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use egui::Context;
 use quark_core::annot::Annotation;
 use quark_core::geom::Rot;
-use quark_core::history::Edit;
 use quark_core::prefs::{Prefs, SidePanel};
 use quark_core::tools::Tool;
 use quark_pdf::service::{DocOp, PdfService, Request, Response};
@@ -302,25 +301,6 @@ impl App {
         let id = tab.id;
         let has_path = tab.path().is_some();
 
-        // Anything created this session has to be written into the file before
-        // the save, or the annotations exist only in the viewer.
-        let pending: Vec<Annotation> = tab.pending_annotations.clone();
-        if !pending.is_empty() {
-            self.service.send(Request::Apply {
-                id,
-                op: Box::new(DocOp::AddAnnotations(pending)),
-            });
-            if let Some(t) = self.tab_mut() {
-                // Moved into the saved set optimistically; a failure re-reads
-                // the document anyway and would drop them.
-                let moved = std::mem::take(&mut t.pending_annotations);
-                t.annotations.extend(moved.into_iter().map(|mut a| {
-                    a.dirty = false;
-                    a
-                }));
-            }
-        }
-
         let path = if as_new || !has_path {
             let start = self
                 .tab()
@@ -361,29 +341,37 @@ impl App {
         });
     }
 
+    /// A new annotation: a change to the document at once — undone with
+    /// ⌘Z, kept when it is saved — or, for a redaction mark, held here until
+    /// the redactions are applied.
     pub(crate) fn commit_annotation(&mut self, ann: Annotation) {
         let Some(tab) = self.tab_mut() else { return };
-        let boxed = Box::new(ann.clone());
-        tab.pending_annotations.push(ann);
-        tab.history.push(Edit::AddAnnotation(boxed));
-        tab.dirty = true;
+        if quark_pdf::edits::mark_of(&ann).is_none() {
+            tab.pending_annotations.push(ann);
+            return;
+        }
+        let id = tab.id;
+        self.service.send(Request::Apply {
+            id,
+            op: Box::new(DocOp::AddAnnotations(vec![ann])),
+        });
     }
 
     pub(crate) fn delete_annotation(&mut self, id: quark_core::annot::AnnotId) {
         let Some(tab) = self.tab_mut() else { return };
-        // A pending annotation can simply be dropped; one already in the file
-        // needs the document rewritten, which is handled on save.
+        tab.selected_annotation = None;
+        // A mark waiting to be applied is simply dropped; one in the
+        // document is a change to it, undone like any.
         if let Some(i) = tab.pending_annotations.iter().position(|a| a.id == id) {
-            let removed = tab.pending_annotations.remove(i);
-            tab.history.push(Edit::RemoveAnnotation(Box::new(removed)));
-            tab.selected_annotation = None;
+            tab.pending_annotations.remove(i);
             return;
         }
-        if let Some(i) = tab.annotations.iter().position(|a| a.id == id) {
-            let removed = tab.annotations.remove(i);
-            tab.history.push(Edit::RemoveAnnotation(Box::new(removed)));
-            tab.selected_annotation = None;
-            tab.dirty = true;
+        if tab.annotations.iter().any(|a| a.id == id) {
+            let doc = tab.id;
+            self.service.send(Request::Apply {
+                id: doc,
+                op: Box::new(DocOp::RemoveAnnotations(vec![id])),
+            });
         }
     }
 
@@ -550,7 +538,6 @@ impl App {
                         tab.invalidate_layout();
                         tab.ensure_layout();
                         tab.bump_token();
-                        tab.dirty = true;
                         tab.selected_pages.retain(|&p| p < tab.info.page_count);
                         if tab.current_page >= tab.info.page_count {
                             tab.current_page = tab.info.page_count.saturating_sub(1);
@@ -587,8 +574,7 @@ impl App {
 
                 Response::Saved { id, path } => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
-                        tab.dirty = false;
-                        tab.history.mark_saved();
+                        tab.info.dirty = false;
                         tab.info.path = Some(path.clone());
                     }
                     self.toast(

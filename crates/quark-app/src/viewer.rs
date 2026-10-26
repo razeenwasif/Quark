@@ -27,6 +27,8 @@ pub enum ViewerAction {
         id: quark_core::annot::AnnotId,
         delta: Vec2,
     },
+    /// A drag of an annotation was let go.
+    MoveFinished(quark_core::annot::AnnotId),
     DeleteAnnotation(quark_core::annot::AnnotId),
     /// A marquee zoom finished.
     ZoomToRect { page: usize, rect: Rect },
@@ -892,7 +894,7 @@ fn handle_select(
             }
             if response.drag_stopped() {
                 ui.memory_mut(|m| m.data.remove::<Vec2>(drag_id));
-                return ViewerAction::None;
+                return ViewerAction::MoveFinished(id);
             }
         }
     }
