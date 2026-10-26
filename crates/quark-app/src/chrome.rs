@@ -2723,6 +2723,7 @@ impl eframe::App for App {
         // Set by the home screen's action cards; dispatched once the central
         // panel has given back its borrow on `self`.
         let mut home_command: Option<Command> = None;
+        let mut books_action = None;
         let mut work_area = None;
         let action = egui::CentralPanel::default()
             .frame(well)
@@ -2736,6 +2737,7 @@ impl eframe::App for App {
                         // it. The queue is drained a few lines below.
                         crate::home::Action::Open(path) => self.startup_files.push(path),
                         crate::home::Action::Run(command) => home_command = Some(command),
+                        crate::home::Action::Books(a) => books_action = Some(a),
                     }
                     return ViewerAction::None;
                 }
@@ -2792,6 +2794,11 @@ impl eframe::App for App {
         self.command_palette(ctx, &p);
         self.handle_dialog(ctx, &p);
 
+        if let Some(a) = books_action {
+            self.books_action(a);
+        }
+        self.tend_library(ctx);
+
         // Keep the remembered reading position current.
         if let Some(tab) = self.tab() {
             if let Some(path) = tab.path() {
@@ -2815,6 +2822,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.library.flush();
         save_prefs(&self.prefs);
     }
 }

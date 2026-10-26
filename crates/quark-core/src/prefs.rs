@@ -115,6 +115,9 @@ pub struct Prefs {
     pub default_save_optimized: bool,
     pub theme_dark: bool,
     pub ui_scale: f32,
+    /// The folders the library's books are in, as typed: `~` is the home
+    /// folder.
+    pub library_folders: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -151,6 +154,7 @@ impl Default for Prefs {
             default_save_optimized: false,
             theme_dark: true,
             ui_scale: 1.0,
+            library_folders: vec!["~/Documents/Books".into()],
         }
     }
 }

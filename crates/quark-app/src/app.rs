@@ -65,6 +65,8 @@ pub struct App {
     /// The home screen. Always first in the tab strip, whether or not it is
     /// the surface currently showing.
     pub(crate) home: crate::home::HomeState,
+    /// The books in the person's folders, walked on a worker.
+    pub(crate) library: quark_pdf::library::Library,
     /// The side panel to bring back when the pages island is reopened.
     pub(crate) last_side_panel: SidePanel,
     /// The highlighted row in the command palette.
@@ -135,17 +137,79 @@ impl App {
             dock: Dock::default(),
             dock_open: true,
             home: crate::home::HomeState::default(),
+            library: library_kept(),
             last_side_panel: SidePanel::Thumbnails,
             palette_index: 0,
             palette_was_open: false,
             grain: None,
         };
 
+        // On screen at once as it was last walked, and walked again behind.
+        app.library.set_folders(app.prefs.library_folders.clone());
+        app.library.walk();
+        app.sync_books();
+
         let pending = std::mem::take(&mut app.startup_files);
         for f in pending {
             app.open_path(&f, None);
         }
         app
+    }
+
+    /// The home screen's library, as the library now is.
+    pub(crate) fn sync_books(&mut self) {
+        let shelf = &mut self.home.books;
+        shelf.books = self.library.books();
+        shelf.folders = self.library.folders().to_vec();
+        shelf.missing = self.library.missing();
+        shelf.walking = self.library.walking();
+    }
+
+    /// What the library asked for.
+    pub(crate) fn books_action(&mut self, action: crate::books::BooksAction) {
+        use crate::books::BooksAction;
+        match action {
+            BooksAction::None => {}
+            BooksAction::Open(path) => self.startup_files.push(path),
+            BooksAction::Rename { path, title, author } => {
+                if let Err(e) = self.library.rename(&path, &title, &author) {
+                    self.toast(e, true);
+                }
+            }
+            BooksAction::SetFolders(folders) => {
+                self.prefs.library_folders = folders.clone();
+                save_prefs(&self.prefs);
+                self.library.set_folders(folders);
+                self.library.walk();
+            }
+            BooksAction::LookAgain => self.library.walk(),
+        }
+        self.sync_books();
+    }
+
+    /// The library's walk, where the book on screen was left, and the covers
+    /// come on screen: once a frame.
+    pub(crate) fn tend_library(&mut self, ctx: &Context) {
+        if self.library.poll() {
+            self.sync_books();
+        }
+        if self.library.walking() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(120));
+        }
+        if let Some(path) = self.tab().and_then(|t| t.path().cloned()) {
+            let page = self.tab().map_or(0, |t| t.current_page);
+            self.library.left_at(&path, page);
+        }
+        for path in std::mem::take(&mut self.home.books.wanted) {
+            match self.library.cover_file(&path) {
+                Some(keep) => self.service.send(Request::Cover {
+                    path,
+                    max_edge: crate::books::COVER_EDGE,
+                    keep: Some(keep),
+                }),
+                None => self.home.books.cover_drawn(ctx, path, None),
+            }
+        }
     }
 
     pub(crate) fn palette(&self) -> Palette {
@@ -180,6 +244,8 @@ impl App {
     /// returns to the document the user was last reading.
     pub(crate) fn show_home(&mut self) {
         self.home.visible = true;
+        // Where the books just read were left.
+        self.sync_books();
     }
 
     /// Where the visible surface sits in the tab strip. Home is slot 0 and
@@ -422,8 +488,13 @@ impl App {
                     let mut tab = Tab::new(id, *info, self.prefs.page_mode, self.prefs.zoom);
                     if let Some(path) = tab.path().cloned() {
                         let key = path.to_string_lossy().into_owned();
-                        if let Some(page) = self.prefs.remembered_page(&key) {
-                            tab.current_page = page;
+                        // A book of the library is opened where it was left,
+                        // however long ago that was.
+                        let left = self.prefs.remembered_page(&key).or_else(|| {
+                            self.prefs.remember_position.then(|| self.library.page_left(&path)).flatten()
+                        });
+                        if let Some(page) = left {
+                            tab.current_page = page.min(tab.info.page_count.saturating_sub(1));
                         }
                         self.prefs.push_recent(&key, tab.current_page);
                     }
@@ -482,6 +553,10 @@ impl App {
                         self.prefs.tint,
                     );
                     self.textures.insert(ctx, key, &raster);
+                }
+
+                Response::Cover { path, raster } => {
+                    self.home.books.cover_drawn(ctx, path, raster.as_deref());
                 }
 
                 Response::Thumbnail {
@@ -657,6 +732,15 @@ pub(crate) fn reveal_hit(tab: &mut Tab, hit: &quark_core::search::SearchHit) {
 }
 
 // --- preferences persistence ---
+
+/// The library as kept beside the settings; in memory when there is nowhere
+/// to keep it.
+fn library_kept() -> quark_pdf::library::Library {
+    match dirs::data_dir() {
+        Some(dir) => quark_pdf::library::Library::kept_in(&dir.join("Quark")),
+        None => quark_pdf::library::Library::default(),
+    }
+}
 
 fn prefs_path() -> Option<PathBuf> {
     let mut d = dirs::config_dir()?;

@@ -19,6 +19,7 @@ pub mod edits;
 pub mod engine;
 pub mod export;
 pub mod forms;
+pub mod library;
 pub mod organize;
 pub mod outline;
 pub mod render;

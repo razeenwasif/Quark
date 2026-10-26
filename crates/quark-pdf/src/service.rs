@@ -146,6 +146,14 @@ pub enum Request {
         tint: PageTint,
         token: u64,
     },
+    /// A book's cover: its first page, no longer than `max_edge` on its long
+    /// side — read from `keep` when it is there, and kept there when drawn.
+    /// The file is opened for this alone and closed after.
+    Cover {
+        path: PathBuf,
+        max_edge: u32,
+        keep: Option<PathBuf>,
+    },
     PageText {
         id: DocId,
         page: usize,
@@ -234,6 +242,11 @@ pub enum Response {
         page: usize,
         token: u64,
         raster: Box<Raster>,
+    },
+    /// A cover, or none for a file that cannot be drawn.
+    Cover {
+        path: PathBuf,
+        raster: Option<Box<Raster>>,
     },
     PageText {
         id: DocId,
@@ -477,6 +490,11 @@ fn handle(req: Request, docs: &mut HashMap<DocId, Document>, edits: &mut Edits, 
                 }
                 Err(e) => fail(tx, id, &format!("render page {}", request.page + 1), e),
             }
+        }
+
+        Request::Cover { path, max_edge, keep } => {
+            let raster = cover(&path, max_edge, keep.as_deref());
+            let _ = tx.send(Response::Cover { path, raster: raster.map(Box::new) });
         }
 
         Request::Thumbnail {
@@ -920,6 +938,27 @@ fn reload(
             false
         }
     }
+}
+
+/// A book's first page, drawn — or read from where it was kept.
+fn cover(path: &Path, max_edge: u32, keep: Option<&Path>) -> Option<Raster> {
+    if let Some(kept) = keep.and_then(|k| image::open(k).ok()) {
+        let rgba = kept.to_rgba8();
+        return Some(Raster { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() });
+    }
+    let doc = Document::open(path, None).ok()?;
+    let raster = crate::render::render_thumbnail(&doc, 0, max_edge, PageTint::None).ok()?;
+    if let Some(keep) = keep {
+        let png = image::RgbaImage::from_raw(raster.width, raster.height, raster.rgba.clone())?;
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        if png.write_to(&mut bytes, image::ImageFormat::Png).is_ok() {
+            if let Some(dir) = keep.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = crate::library::write_atomically(keep, bytes.get_ref());
+        }
+    }
+    Some(raster)
 }
 
 #[cfg(test)]
@@ -1388,6 +1427,34 @@ mod tests {
         let back = fields_of(&svc, id);
         assert_eq!(back.iter().find(|f| f.name == "name").map(|f| f.value.as_str()), Some("Ada"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_cover_is_drawn_from_the_first_page_kept_and_read_back_from_where_it_was_kept() {
+        let _g = testutil::pdfium_guard();
+        let svc = PdfService::start();
+        let keep = testutil::tmp_path("covers/one.png");
+        let _ = std::fs::remove_file(&keep);
+        let cover = |svc: &PdfService, path: PathBuf| {
+            svc.send(Request::Cover { path, max_edge: 120, keep: Some(keep.clone()) });
+            wait_for(svc, |r| match r {
+                Response::Cover { raster, .. } => Some(raster.clone()),
+                _ => None,
+            })
+        };
+        let drawn = cover(&svc, testutil::sample_pdf()).expect("the sample is drawn");
+        assert_eq!(drawn.width.max(drawn.height), 120, "{}×{}", drawn.width, drawn.height);
+        assert!(keep.is_file(), "kept for the next time");
+        // Kept: the same picture, without the book being opened at all.
+        let again = cover(&svc, testutil::tmp_path("there-is-no-such-book.pdf")).expect("read from where it was kept");
+        assert_eq!((again.width, again.height, again.rgba == drawn.rgba), (drawn.width, drawn.height, true));
+        let _ = std::fs::remove_file(&keep);
+        svc.send(Request::Cover { path: testutil::tmp_path("there-is-no-such-book.pdf"), max_edge: 120, keep: None });
+        let none = wait_for(&svc, |r| match r {
+            Response::Cover { raster, .. } => Some(raster.is_none()),
+            _ => None,
+        });
+        assert!(none, "a file that is not there has no cover");
     }
 
     #[test]

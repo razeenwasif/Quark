@@ -11,6 +11,7 @@ quark-core.workspace = true
 quark-edit.workspace = true
 pdfium-render.workspace = true
 lopdf.workspace = true
+dirs.workspace = true
 image.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true

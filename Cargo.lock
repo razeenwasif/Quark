@@ -3209,6 +3209,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "crossbeam-channel",
+ "dirs",
  "image",
  "lopdf",
  "parking_lot",

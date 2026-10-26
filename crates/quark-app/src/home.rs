@@ -48,7 +48,9 @@ const DROP_HEIGHT: f32 = 160.0;
 /// Which part of the home screen the rail has selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Section {
+    /// The library: the books in the person's folders.
     #[default]
+    Books,
     Recent,
     Tools,
 }
@@ -58,6 +60,7 @@ pub(crate) enum Action {
     None,
     Open(PathBuf),
     Run(Command),
+    Books(crate::books::BooksAction),
 }
 
 /// One row of the recent list, with its filesystem facts already resolved.
@@ -76,6 +79,8 @@ pub(crate) struct HomeState {
     /// the tab strip, so this is not "does it exist" but "is it showing".
     pub(crate) visible: bool,
     pub(crate) section: Section,
+    /// The library, as last walked.
+    pub(crate) books: crate::books::BooksState,
     entries: Vec<Entry>,
     /// Identifies the recent list the rows were built from, so they are only
     /// rebuilt when it actually changes.
@@ -88,6 +93,7 @@ impl Default for HomeState {
             // Quark opens on home; a file on the command line replaces it.
             visible: true,
             section: Section::default(),
+            books: crate::books::BooksState::default(),
             entries: Vec::new(),
             fingerprint: 0,
         }
@@ -269,7 +275,9 @@ fn nav(ui: &mut Ui, p: &Palette, state: &mut HomeState) {
     ui.add_space(4.0);
 
     let recent = state.entries.len();
+    let books = state.books.books.len();
     for (section, label, icon, count) in [
+        (Section::Books, "Books", Icon::Bookmark, Some(books).filter(|n| *n > 0)),
         (Section::Recent, "Recent", Icon::Clock, Some(recent).filter(|n| *n > 0)),
         (Section::Tools, "Tools", Icon::Grid, None),
     ] {
@@ -356,7 +364,7 @@ fn rounded_outline(rect: Rect, radius: f32) -> Vec<egui::Pos2> {
 }
 
 /// The main column: heading, quick actions, then the selected section.
-fn body(ui: &mut Ui, p: &Palette, state: &HomeState) -> Action {
+fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState) -> Action {
     let mut action = Action::None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -365,6 +373,7 @@ fn body(ui: &mut Ui, p: &Palette, state: &HomeState) -> Action {
             // so they stay aligned with each other on any window width.
             ui.set_max_width(MAX_CONTENT.min(ui.available_width()));
             let (title, subtitle) = match state.section {
+                Section::Books => ("Books", "Every PDF in your folders, shelved by the folder it is in."),
                 Section::Recent => ("Recent files", "Pick up where you left off, or start something new."),
                 Section::Tools => ("Tools", "Start a new document here, or open one to edit, export and sign it."),
             };
@@ -372,6 +381,17 @@ fn body(ui: &mut Ui, p: &Palette, state: &HomeState) -> Action {
             ui.add_space(2.0);
             ui.label(egui::RichText::new(subtitle).font(theme::body(13.5)).color(p.text_muted));
             ui.add_space(24.0);
+
+            // The library is for reading: its shelves, not the tools.
+            if state.section == Section::Books {
+                action = match crate::books::show(ui, p, &mut state.books) {
+                    crate::books::BooksAction::None => Action::None,
+                    crate::books::BooksAction::Open(path) => Action::Open(path),
+                    other => Action::Books(other),
+                };
+                ui.add_space(20.0);
+                return;
+            }
 
             let gap = 14.0;
             let width = ((ui.available_width() - gap * 3.0) / 4.0).floor().max(150.0);
@@ -392,6 +412,8 @@ fn body(ui: &mut Ui, p: &Palette, state: &HomeState) -> Action {
                     }
                 }
                 Section::Tools => tools_note(ui, p),
+                // Drawn above, without the cards.
+                Section::Books => {}
             }
             ui.add_space(20.0);
         });
