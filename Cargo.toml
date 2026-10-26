@@ -7,6 +7,11 @@ members = [
     "crates/quark-pdf",
     "crates/quark-ui",
     "crates/quark-shell",
+    "crates/quark-text",
+    "crates/quark-tex",
+    "crates/quark-lsp",
+    "crates/quark-edit",
+    "crates/quark-lab",
     "xtask",
 ]
 
@@ -20,6 +25,11 @@ default-members = [
     "crates/quark-pdf",
     "crates/quark-ui",
     "crates/quark-shell",
+    "crates/quark-text",
+    "crates/quark-tex",
+    "crates/quark-lsp",
+    "crates/quark-edit",
+    "crates/quark-lab",
 ]
 
 [workspace.package]
@@ -36,6 +46,11 @@ quark-core = { path = "crates/quark-core" }
 quark-pdf = { path = "crates/quark-pdf" }
 quark-ui = { path = "crates/quark-ui" }
 quark-shell = { path = "crates/quark-shell" }
+quark-text = { path = "crates/quark-text" }
+quark-tex = { path = "crates/quark-tex" }
+quark-lsp = { path = "crates/quark-lsp" }
+quark-edit = { path = "crates/quark-edit" }
+quark-lab = { path = "crates/quark-lab" }
 
 # --- ui ---
 egui = "0.36"

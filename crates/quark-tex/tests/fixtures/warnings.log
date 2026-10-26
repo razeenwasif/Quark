@@ -1,0 +1,36 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2026) (preloaded format=pdflatex)
+(/Users/you/paper/main.tex
+LaTeX2e <2025-11-01>
+(/Users/you/.proton/tex/TinyTeX/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2024/06/29 v1.4n Standard LaTeX document class
+)
+(/Users/you/.proton/tex/TinyTeX/texmf-dist/tex/latex/hyperref/hyperref.sty
+)
+(./main.aux)
+(./chapters/method.tex
+
+LaTeX Warning: Citation `knuth84' on page 2 undefined on input line 7.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 9.
+
+[2]
+Overfull \hbox (12.0pt too wide) in paragraph at lines 14--15
+[]\OT1/cmr/m/n/10 A very long line that does not fit$[]$ 
+ []
+
+)
+Underfull \hbox (badness 10000) in paragraph at lines 25--25
+
+ []
+
+
+LaTeX Warning: Reference `fig:loop' on page 3 undefined on input line 31.
+
+[3] (./main.aux)
+
+LaTeX Warning: There were undefined references.
+
+ )
+Output written on main.pdf (3 pages, 52000 bytes).

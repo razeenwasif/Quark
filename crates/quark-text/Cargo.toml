@@ -1,0 +1,12 @@
+[package]
+name = "quark-text"
+description = "Rope-backed buffers, an undo tree, and the motions and text objects the modal engine resolves against."
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ropey = "1.6"
+serde = { workspace = true }

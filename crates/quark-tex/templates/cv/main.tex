@@ -1,0 +1,30 @@
+\documentclass[10pt]{article}
+
+\usepackage[margin=0.8in]{geometry}
+\usepackage{hyperref}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+
+% A heading for each part of the CV, ruled beneath.
+\newcommand{\cvpart}[1]{\vspace{10pt}{\large\bfseries #1}\\[-6pt]\rule{\linewidth}{0.4pt}\\[2pt]}
+% One entry: what, where, and when, then a line or two on it.
+\newcommand{\entry}[3]{\textbf{#1}, #2 \hfill #3\\}
+
+\begin{document}
+
+{\LARGE\bfseries Your Name}\\[4pt]
+you@example.org \quad $\cdot$ \quad +00 000 000 000 \quad $\cdot$ \quad \href{https://example.org}{example.org}
+
+\cvpart{Education}
+\entry{Degree}{University}{2020--2024}
+What you studied, and anything worth saying about it.
+
+\cvpart{Experience}
+\entry{Role}{Organisation}{2024--now}
+What you did there, and what came of it.
+
+\cvpart{Skills}
+The tools and languages you know well.
+
+\end{document}

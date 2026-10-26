@@ -1,0 +1,14 @@
+[package]
+name = "quark-tex"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The LaTeX mode's understanding of TeX: its logs, a project's main file and engine, SyncTeX's map, BibTeX, an outline — pure, with no processes."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# SyncTeX's map is gzipped.
+flate2 = "1.1"

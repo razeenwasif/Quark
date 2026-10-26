@@ -1,0 +1,33 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2026) (preloaded format=pdflatex 2026.10.1)  12 OCT 2026 12:00
+entering extended mode
+ restricted \write18 enabled.
+ %&-line parsing enabled.
+**/Users/you/paper/main.tex
+(/Users/you/paper/main.tex
+LaTeX2e <2025-11-01>
+L3 programming layer <2025-10-20>
+(/Users/you/.proton/tex/TinyTeX/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2024/06/29 v1.4n Standard LaTeX document class
+(/Users/you/.proton/tex/TinyTeX/texmf-dist/tex/latex/base/size10.clo
+File: size10.clo 2024/06/29 v1.4n Standard LaTeX file (size option)
+)
+\c@part=\count192
+)
+(./chapters/intro.tex
+./chapters/intro.tex:12: Undefined control sequence.
+l.12 We use \foo
+                 to mean it.
+The control sequence at the end of the top line
+of your error message was never \def'ed.
+)
+./main.tex:20: Missing $ inserted.
+<inserted text> 
+                $
+l.20 The sum x^
+               2 is positive.
+I've inserted a begin-math/end-math symbol since I think
+you left one out. Proceed, with fingers crossed.
+
+[1{/Users/you/.proton/tex/TinyTeX/texmf-var/fonts/map/pdftex/updmap/pdftex.map}] [2] [3]
+(./main.aux) )
+Output written on main.pdf (3 pages, 41234 bytes).

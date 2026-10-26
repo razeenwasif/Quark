@@ -1,0 +1,20 @@
+[package]
+name = "quark-edit"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quark's changes to a PDF — pages, comments, forms, passwords, combining, cleaning — each undoable, saved as an incremental update: pure, with no processes."
+
+[features]
+# A form to test with, for other crates' tests.
+fixture = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Quark's lopdf, which quark-pdf already builds.
+lopdf = { workspace = true }
+# A new key for each PDF given passwords.
+getrandom = "0.3"

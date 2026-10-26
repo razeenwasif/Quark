@@ -1,0 +1,63 @@
+{
+ "tag_name": "v5.26.0",
+ "name": "",
+ "draft": false,
+ "prerelease": false,
+ "published_at": "2026-06-25T19:19:51Z",
+ "assets": [
+  {
+   "name": "texlab-aarch64-linux.tar.gz",
+   "size": 10383190,
+   "digest": "sha256:a85cdfcd22454b8d8550f4b0f0620c45ab51760f302fac7a12bc18a890f70f8c",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-aarch64-linux.tar.gz"
+  },
+  {
+   "name": "texlab-aarch64-macos.tar.gz",
+   "size": 10154621,
+   "digest": "sha256:af7972ffd230711ba04ada9b69cc32ce9111d9196ba69538062872faefdbee56",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-aarch64-macos.tar.gz"
+  },
+  {
+   "name": "texlab-aarch64-windows.zip",
+   "size": 9853223,
+   "digest": "sha256:99b215e9a44169eb8d786c33484b963055e1c3dd40f68e14fcc47ae1c84e92c1",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-aarch64-windows.zip"
+  },
+  {
+   "name": "texlab-armv7hf-linux.tar.gz",
+   "size": 10269607,
+   "digest": "sha256:e1b3943d770bef6504d8f86d33b399dc32d29a50e2a20b481922a7a8bee8fb8a",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-armv7hf-linux.tar.gz"
+  },
+  {
+   "name": "texlab-i686-windows.zip",
+   "size": 9653200,
+   "digest": "sha256:581b12e5c0fa3f2d22bc3a44a4310c6d10273cfcdb4bd0174d590d5575ad8700",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-i686-windows.zip"
+  },
+  {
+   "name": "texlab-x86_64-alpine.tar.gz",
+   "size": 10581472,
+   "digest": "sha256:66ed15ef745076a2d50594a13badbb9e8d54dd4eda2e2bbcf2bf9f8d97d27896",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-x86_64-alpine.tar.gz"
+  },
+  {
+   "name": "texlab-x86_64-linux.tar.gz",
+   "size": 10439323,
+   "digest": "sha256:8697bd5e479d4584b14b7eed5c320c80ec4e1d91ebefbb6801e6bf38e9971300",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-x86_64-linux.tar.gz"
+  },
+  {
+   "name": "texlab-x86_64-macos.tar.gz",
+   "size": 10253264,
+   "digest": "sha256:6091611f756b28e1a57612b130c196df4b0bb6e22dde5cf5d890578513397daf",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-x86_64-macos.tar.gz"
+  },
+  {
+   "name": "texlab-x86_64-windows.zip",
+   "size": 9997967,
+   "digest": "sha256:cb028d44c3d2b85d36a2ed52d41a0ff43a341b1f04c500c56c4524c4eb72b316",
+   "browser_download_url": "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-x86_64-windows.zip"
+  }
+ ]
+}

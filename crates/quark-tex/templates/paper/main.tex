@@ -1,0 +1,74 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[margin=1in]{geometry}
+\usepackage[numbers]{natbib}
+\usepackage{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+
+\title{{{title}}}
+\author{Your Name \\ \small Your Institution \\ \small\texttt{you@example.org}}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+The problem, what was done, and what it showed, in a paragraph.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Why the problem matters, and what this paper adds to earlier work~\citep{knuth1984}.
+
+\section{Method}
+\label{sec:method}
+
+\begin{definition}
+  A term the rest of the paper uses.
+\end{definition}
+
+\begin{theorem}
+  \label{thm:main}
+  What is claimed.
+\end{theorem}
+\begin{proof}
+  Why it holds.
+\end{proof}
+
+\section{Results}
+\label{sec:results}
+
+\begin{table}[ht]
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Method & Accuracy & Time (s) \\
+    \midrule
+    Baseline & 0.71 & 12.0 \\
+    Ours     & 0.83 & 9.5 \\
+    \bottomrule
+  \end{tabular}
+  \caption{What the table shows.}
+  \label{tab:results}
+\end{table}
+
+Table~\ref{tab:results} compares them; Theorem~\ref{thm:main} explains why.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+What was learnt, and what is left.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

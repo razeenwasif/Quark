@@ -1,0 +1,135 @@
+{
+ "tag_name": "v2026.10",
+ "name": "TinyTeX v2026.10",
+ "draft": false,
+ "prerelease": false,
+ "published_at": "2026-10-01T07:43:37Z",
+ "assets": [
+  {
+   "name": "installer-unix-v2026.10.tar.gz",
+   "size": 5267452,
+   "digest": "sha256:ff1de66b49bade09ed6a3eedf92e682b95ec202eca8509d88feebe325d1d5e42",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/installer-unix-v2026.10.tar.gz"
+  },
+  {
+   "name": "texlive-local.deb",
+   "size": 3804,
+   "digest": "sha256:77557150e5c453a644f08dc487e1cc082d2e8bd4416df4d5b31d3ec8640777bc",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/texlive-local.deb"
+  },
+  {
+   "name": "TinyTeX-0-darwin-v2026.10.tar.xz",
+   "size": 1613524,
+   "digest": "sha256:f12b8a89ab09cb622fa95e11e1dc31630a0894d8049c9283e874a9fd31233ad1",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-0-darwin-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-0-linux-arm64-v2026.10.tar.xz",
+   "size": 1346880,
+   "digest": "sha256:c1318f5c4a4bd0c2b0acd8dd3d147cc53666b2cca67487541dc3f967118640dd",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-0-linux-arm64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-0-linux-x86_64-v2026.10.tar.xz",
+   "size": 1411760,
+   "digest": "sha256:1b9ca8cf921f692a4331c4df15b90071e21799f2ae2db0082b1f285b30452da0",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-0-linux-x86_64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-0-linuxmusl-x86_64-v2026.10.tar.xz",
+   "size": 1807352,
+   "digest": "sha256:0a801388929596914e75baa70c2d04c2dbc8729f7a3b2de67e51d7005853e990",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-0-linuxmusl-x86_64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-0-windows-v2026.10.exe",
+   "size": 24231636,
+   "digest": "sha256:8321783730cba6513c18f3ab457063643a90e966e7cf0e21bf3401ef0721c30a",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-0-windows-v2026.10.exe"
+  },
+  {
+   "name": "TinyTeX-1-darwin-v2026.10.tar.xz",
+   "size": 67189208,
+   "digest": "sha256:e40c294efae81026d8cc8d12c09d2dd456d268efe7fe092410478bc1973fd40f",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-1-darwin-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-1-linux-arm64-v2026.10.tar.xz",
+   "size": 53793596,
+   "digest": "sha256:1bc5465c7a7c6f13e13c1b54a52147577eb3f389033af0444bc097698eb6653f",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-1-linux-arm64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-1-linux-x86_64-v2026.10.tar.xz",
+   "size": 53589988,
+   "digest": "sha256:4d519d6236ee6798e3ec0d8e2093d1fda01aeb267aa22c2a5586d76bcfce6566",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-1-linux-x86_64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-1-linuxmusl-x86_64-v2026.10.tar.xz",
+   "size": 55395880,
+   "digest": "sha256:118ddae121d25998625799690c732ebf49e583d0a86ebf27d45b52c2a4d4deeb",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-1-linuxmusl-x86_64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-1-tar-v2026.10.gz",
+   "size": 74682956,
+   "digest": "sha256:79d52d94ec844a82ca50e18a8394bfc4ab2316ca5a406632aee38c72907e639c",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-1-tar-v2026.10.gz"
+  },
+  {
+   "name": "TinyTeX-1-windows-v2026.10.exe",
+   "size": 73701889,
+   "digest": "sha256:36c329c644683d981a668419d13c8804696e2816ae4d287ad755788fee231a31",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-1-windows-v2026.10.exe"
+  },
+  {
+   "name": "TinyTeX-darwin-v2026.10.tar.xz",
+   "size": 210535256,
+   "digest": "sha256:9962e445b56f06feb2c28f73561e523e89d550e98abf910ba60b0ffb3856921f",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-darwin-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-linux-arm64-v2026.10.tar.xz",
+   "size": 158454704,
+   "digest": "sha256:e4caa195211d4ae8b557a52752c850f63027450065ed7db3d9350ba63e0e1aac",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-linux-arm64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-linux-x86_64-v2026.10.tar.xz",
+   "size": 151904844,
+   "digest": "sha256:54fec1c79ab437d2d52e2f918bdb738c85779d654a93e62cc44f022e227692b5",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-linux-x86_64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-linuxmusl-x86_64-v2026.10.tar.xz",
+   "size": 147766260,
+   "digest": "sha256:86c8b91e56bf2a613dd70b3d2dc7bc2018aeb11a22d17ecb4ba73beb5f832f94",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-linuxmusl-x86_64-v2026.10.tar.xz"
+  },
+  {
+   "name": "TinyTeX-v2026.10.tar.gz",
+   "size": 200697426,
+   "digest": "sha256:4ac08282f9964cdd9698cb141bc4d9fa3418024f055f3568e573af42ab9d936b",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-v2026.10.tar.gz"
+  },
+  {
+   "name": "TinyTeX-v2026.10.tgz",
+   "size": 267606867,
+   "digest": "sha256:bcb6648001814d2bc5c97eb98234240ea1110d94136d2053f95e2567f45ade80",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-v2026.10.tgz"
+  },
+  {
+   "name": "TinyTeX-v2026.10.zip",
+   "size": 247389422,
+   "digest": "sha256:dc1d6e63b21af62130ede1dcc4113bffdc184544690a23e3f489d75340f4ff61",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-v2026.10.zip"
+  },
+  {
+   "name": "TinyTeX-windows-v2026.10.exe",
+   "size": 173013624,
+   "digest": "sha256:e23dcc65026b96a2c34bbd793087f64e6b6e9173c20483fe875050251e3994e1",
+   "browser_download_url": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-windows-v2026.10.exe"
+  }
+ ]
+}

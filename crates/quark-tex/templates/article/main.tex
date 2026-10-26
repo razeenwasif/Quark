@@ -1,0 +1,38 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+
+\title{{{title}}}
+\author{Your Name}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+A sentence or two on what this is about.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Write here. Mathematics goes inline, as $e^{i\pi} + 1 = 0$, or on a line of its own:
+\begin{equation}
+  \int_0^1 x^2 \, dx = \frac{1}{3}.
+  \label{eq:integral}
+\end{equation}
+Equation~\eqref{eq:integral} is referred to by its label, as Knuth's book is cited~\cite{knuth1984}.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+What it came to.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

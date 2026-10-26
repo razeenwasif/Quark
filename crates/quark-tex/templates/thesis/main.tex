@@ -1,0 +1,36 @@
+\documentclass[12pt,oneside]{book}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{hyperref}
+
+\onehalfspacing
+
+\title{{{title}}}
+\author{Your Name}
+\date{\today}
+
+\begin{document}
+
+\frontmatter
+\maketitle
+
+\chapter*{Abstract}
+The thesis in a page.
+
+\tableofcontents
+
+\mainmatter
+% Each chapter is a file of its own; \includeonly{chapters/background}
+% in the preamble typesets just the one being written.
+\include{chapters/introduction}
+\include{chapters/background}
+\include{chapters/conclusion}
+
+\backmatter
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

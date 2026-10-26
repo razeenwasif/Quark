@@ -1,0 +1,21 @@
+[package]
+name = "quark-lab"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The programs Quark runs for its documents: TinyTeX made with the person's say-so, TeX builds in a sandbox, and OCR by tesseract."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# A run's record names its code and environment by digest.
+sha2 = "0.10"
+# Planning TeX asks GitHub what there is; making it downloads TinyTeX and
+# texlab.
+ureq = { version = "3", default-features = false, features = ["rustls", "json", "platform-verifier"] }
+
+[target.'cfg(unix)'.dependencies]
+# A run is its own process group, stopped as one.
+libc = "0.2"
