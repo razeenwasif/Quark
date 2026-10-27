@@ -294,7 +294,35 @@ mod tests {
         .unwrap();
         std::fs::write(root.join("chapters/variance.tex"), "\\section{Variance}\n").unwrap();
         std::fs::write(root.join("refs.bib"), "@book{owen2013,}\n").unwrap();
-        for (dark, name) in [(true, "latex-dark.png"), (false, "latex-light.png")] {
+        let plan = quark_lab::tex::TexPlan {
+            bundle: quark_lab::tex::Bundle::Full,
+            tinytex: "v2026.10".into(),
+            texlab: "v5.26.0".into(),
+            downloads: vec![
+                quark_lab::tex::TexDownload { what: "TinyTeX v2026.10".into(), host: "github.com".into(), bytes: 121_634_816, exact: true, verified: true },
+                quark_lab::tex::TexDownload { what: "texlab v5.26.0".into(), host: "github.com".into(), bytes: 9_437_184, exact: true, verified: true },
+                quark_lab::tex::TexDownload { what: "latexmk".into(), host: "TeX Live's mirrors".into(), bytes: 1_048_576, exact: false, verified: false },
+            ],
+            download: 132_120_576,
+            disk: 640 << 20,
+            kept: 230 << 20,
+            free: 90 << 30,
+            fits: true,
+            home: "/Users/you/.quark/tex".into(),
+            tinytex_url: String::new(),
+            tinytex_sha256: None,
+            texlab_url: String::new(),
+            texlab_sha256: None,
+        };
+        let missing = quark_lab::tex::TexState::Missing { needs: vec![], free: 90 << 30, home: "/Users/you/.quark/tex".into() };
+        let planned = quark_lab::tex::TexState::Planned { plan };
+        let making = quark_lab::tex::TexState::Making {
+            stage: "texlab".into(),
+            done: 6 << 20,
+            total: 9 << 20,
+            log: vec!["TinyTeX unpacked: 4,812 files".into(), "latexmk installed".into(), "texlab: downloading".into()],
+        };
+        for (dark, name, env) in [(true, "latex-dark.png", missing), (false, "latex-light.png", planned), (true, "latex-making.png", making)] {
             let ctx = egui::Context::default();
             theme::install_fonts(&ctx);
             let mode = if dark { ThemeMode::Dark } else { ThemeMode::Light };
@@ -316,7 +344,7 @@ mod tests {
             keys(s, "10G$");
             shoot(&ctx, egui::vec2(1320.0, 820.0), 4, &dir.join(name), |ui| {
                 egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
-                    tex.show(ui, &p);
+                    tex.show(ui, &p, Some(&env), &mut crate::texdock::Dock::default());
                 });
             })
             .unwrap();

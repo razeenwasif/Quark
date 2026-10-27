@@ -23,6 +23,8 @@ const MOST_FILES: usize = 2_000;
 const PASSED: [&str; 6] = ["node_modules", "target", "build", "_minted", "__pycache__", "out"];
 /// The file list's width.
 const FILES_W: f32 = 230.0;
+/// The dock's width.
+const DOCK_W: f32 = 320.0;
 /// The status line's height.
 const STATUS_H: f32 = 28.0;
 
@@ -228,15 +230,31 @@ impl TexProject {
         }
     }
 
-    /// The workspace: its files, the editor's splits and its status line.
-    pub(crate) fn show(&mut self, ui: &mut Ui, p: &Palette) {
+    /// The workspace: its files, the editor's splits and its status line,
+    /// and the dock, where TeX stands; what the dock asked for.
+    pub(crate) fn show(
+        &mut self,
+        ui: &mut Ui,
+        p: &Palette,
+        env: Option<&quark_lab::tex::TexState>,
+        dock: &mut crate::texdock::Dock,
+    ) -> Option<crate::texdock::EnvAction> {
         let full = ui.available_rect_before_wrap();
         ui.allocate_rect(full, Sense::hover());
         let files = Rect::from_min_size(full.min, vec2(FILES_W, full.height()));
-        let editor = Rect::from_min_max(pos2(files.right() + theme::GAP, full.top()), full.max);
+        let side = Rect::from_min_max(pos2(full.right() - DOCK_W, full.top()), full.max);
+        let editor = Rect::from_min_max(pos2(files.right() + theme::GAP, full.top()), pos2(side.left() - theme::GAP, full.bottom()));
         let painter = ui.ctx().layer_painter(ui.layer_id());
         theme::paint_island(&painter, files, p);
         theme::paint_island(&painter, editor, p);
+        theme::paint_island(&painter, side, p);
+        let mut asked = None;
+        if let Some(state) = env {
+            let mut side_ui = ui.new_child(egui::UiBuilder::new().max_rect(side.shrink2(vec2(16.0, 14.0))));
+            egui::ScrollArea::vertical().id_salt("tex-dock").auto_shrink([false, false]).show(&mut side_ui, |ui| {
+                asked = crate::texdock::show(ui, p, state, dock);
+            });
+        }
 
         let mut files_ui = ui.new_child(egui::UiBuilder::new().max_rect(files.shrink2(vec2(10.0, 12.0))));
         self.file_list(&mut files_ui, p);
@@ -246,6 +264,7 @@ impl TexProject {
         let panes = Rect::from_min_max(inner.min, pos2(inner.right(), status.top()));
         self.splits(ui, p, panes);
         self.status_line(ui, p, status);
+        asked
     }
 
     fn file_list(&mut self, ui: &mut Ui, p: &Palette) {

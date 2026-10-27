@@ -125,7 +125,7 @@ fn fingerprint(prefs: &Prefs) -> u64 {
 }
 
 /// Renders a byte count the way a file manager would.
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let b = bytes as f64;
     if bytes < 1024 {

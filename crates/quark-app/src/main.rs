@@ -27,6 +27,7 @@ mod shortcuts;
 mod shot;
 mod tab;
 mod tex;
+mod texdock;
 mod textures;
 mod viewer;
 

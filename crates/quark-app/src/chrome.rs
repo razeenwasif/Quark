@@ -2938,6 +2938,7 @@ impl eframe::App for App {
         let mut home_command: Option<Command> = None;
         let mut books_action = None;
         let mut tex_open: Option<PathBuf> = None;
+        let mut env_asked = None;
         let mut work_area = None;
         let action = egui::CentralPanel::default()
             .frame(well)
@@ -2945,7 +2946,8 @@ impl eframe::App for App {
                 if self.tex_visible {
                     work_area = Some(ui.max_rect());
                     if let Some(tex) = &mut self.tex {
-                        tex.show(ui, &p);
+                        let state = self.tex_env.as_ref().map(|e| e.state());
+                        env_asked = tex.show(ui, &p, state, &mut self.tex_dock);
                     }
                     return ViewerAction::None;
                 }
@@ -3029,6 +3031,10 @@ impl eframe::App for App {
         if let Some(root) = tex_open {
             self.open_tex(&root);
         }
+        if let Some(a) = env_asked {
+            self.env_action(a);
+        }
+        self.tend_tex(ctx);
         self.tend_library(ctx);
         self.tend_ocr(ctx);
 
@@ -3056,6 +3062,11 @@ impl eframe::App for App {
 
     fn on_exit(&mut self) {
         self.library.flush();
+        // A making left half done is taken away by the next check, but one
+        // stopped now leaves less behind.
+        if let Some(env) = &mut self.tex_env {
+            env.quit();
+        }
         save_prefs(&self.prefs);
     }
 }

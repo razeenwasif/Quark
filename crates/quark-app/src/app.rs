@@ -70,6 +70,10 @@ pub struct App {
     /// The LaTeX project open, and whether it is the surface showing.
     pub(crate) tex: Option<crate::tex::TexProject>,
     pub(crate) tex_visible: bool,
+    /// Quark's own TeX, in `~/.quark/tex`: looked at when a project is
+    /// first opened, and made only with the person's say-so.
+    pub(crate) tex_env: Option<quark_lab::tex::TexEnv>,
+    pub(crate) tex_dock: crate::texdock::Dock,
     /// Pages being read with OCR, behind the window.
     pub(crate) ocr: Option<crate::ocr::OcrRun>,
     /// A document as it was when OCR was asked for, while its pages and
@@ -150,6 +154,8 @@ impl App {
             ocr_prep: None,
             tex: None,
             tex_visible: false,
+            tex_env: None,
+            tex_dock: crate::texdock::Dock::default(),
             last_side_panel: SidePanel::Thumbnails,
             palette_index: 0,
             palette_was_open: false,
@@ -231,6 +237,33 @@ impl App {
             crate::ocr::OcrNews::Stopped => self.toast("OCR stopped — nothing was changed", false),
             crate::ocr::OcrNews::Failed(why) => self.toast(format!("OCR: {why}"), true),
             crate::ocr::OcrNews::Read(_) => {}
+        }
+    }
+
+    /// What the TeX dock asked for.
+    pub(crate) fn env_action(&mut self, action: crate::texdock::EnvAction) {
+        use crate::texdock::EnvAction;
+        let Some(env) = self.tex_env.as_mut() else { return };
+        let done = match action {
+            EnvAction::Plan(bundle) => env.plan(bundle),
+            EnvAction::Create => env.create(),
+            EnvAction::Cancel => {
+                env.cancel();
+                Ok(())
+            }
+            EnvAction::Remove => env.remove(),
+        };
+        if let Err(why) = done {
+            self.toast(why, true);
+        }
+    }
+
+    /// TeX's planning or making, once a frame.
+    pub(crate) fn tend_tex(&mut self, ctx: &Context) {
+        let Some(env) = self.tex_env.as_mut() else { return };
+        env.poll();
+        if env.working() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
     }
 
@@ -339,6 +372,10 @@ impl App {
             return;
         }
         self.tex = Some(crate::tex::TexProject::open(root));
+        // Where TeX stands, looked at without starting anything or asking
+        // the network.
+        let env = self.tex_env.get_or_insert_with(quark_lab::tex::TexEnv::at_home);
+        env.check();
         let typed = root.display().to_string();
         self.prefs.tex_projects.retain(|p| *p != typed);
         self.prefs.tex_projects.insert(0, typed);
