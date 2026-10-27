@@ -18,6 +18,7 @@ use quark_syntax::Syntax;
 use quark_ui::theme::{self, Palette};
 
 use crate::code::{self, Pointer, ViewDraw};
+use crate::texvisual::Pane;
 
 /// The most files a project's list shows.
 const MOST_FILES: usize = 2_000;
@@ -613,34 +614,41 @@ impl TexProject {
         self.tell(said);
     }
 
-    /// The visual editor shown, or the source at character `at` of the file
-    /// in focus (or where its cursor is).
-    pub(crate) fn set_visual(&mut self, on: bool, at: Option<usize>) {
-        if on == self.visual.on {
+    /// What the editor's area shows — the source, the page or both — and
+    /// the source's cursor put at character `at`, if one is given.
+    pub(crate) fn set_pane(&mut self, pane: Pane, at: Option<usize>) {
+        self.visual.flush(&mut self.session);
+        if let Some(at) = at {
+            self.session.put_cursor(at);
+        }
+        if pane == self.visual.pane {
             return;
         }
         self.popup.close();
-        if on {
-            // Typing in the source ends here, as one step to undo.
-            if self.session.mode() != VimMode::Normal {
-                let said = self.session.key(&Key::named("Escape"));
-                self.tell(said);
-            }
-        } else {
-            self.visual.flush(&mut self.session);
-            if let Some(at) = at {
-                self.session.put_cursor(at);
-            }
+        // Typing in the source ends when only the page is left, as one
+        // step to undo.
+        if pane == Pane::Visual && self.session.mode() != VimMode::Normal {
+            let said = self.session.key(&Key::named("Escape"));
+            self.tell(said);
         }
-        self.visual.on = on;
+        self.visual.pane = pane;
     }
 
     /// What the visual editor asked for.
-    fn visual_asked(&mut self, asked: crate::texvisual::Asked) {
+    fn visual_asked(&mut self, ctx: &egui::Context, asked: crate::texvisual::Asked) {
         use crate::texvisual::Asked;
         match asked {
             Asked::None => {}
-            Asked::Source(at) => self.set_visual(false, Some(at)),
+            // Beside the source, to the source: the keys go to it.
+            Asked::Source(at) if self.visual.pane == Pane::Both => {
+                self.set_pane(Pane::Both, Some(at));
+                ctx.memory_mut(|m| m.stop_text_input());
+            }
+            Asked::Source(at) => self.set_pane(Pane::Source, Some(at)),
+            Asked::Step(at) => {
+                ctx.memory_mut(|m| m.stop_text_input());
+                self.set_pane(self.visual.pane.next(), Some(at));
+            }
             Asked::Forward(at) => {
                 self.session.put_cursor(at);
                 self.view = DockView::Pdf;
@@ -656,15 +664,15 @@ impl TexProject {
         }
     }
 
-    /// Keys while the visual editor shows and nothing in it is typed in:
-    /// its own, and the workspace's chords — never Vim's.
+    /// Keys while only the page shows and nothing on it is typed in: its
+    /// own, and the workspace's chords — never Vim's.
     fn visual_input(&mut self, ctx: &egui::Context) {
         let events = ctx.input(|i| i.events.clone());
         for event in &events {
             let egui::Event::Key { key, pressed: true, modifiers, .. } = event else { continue };
             let command = modifiers.mac_cmd || modifiers.command;
             match key {
-                egui::Key::E if command => self.set_visual(false, None),
+                egui::Key::E if command => self.set_pane(self.visual.pane.next(), None),
                 egui::Key::Z if command => self.visual.undo(&mut self.session, modifiers.shift),
                 egui::Key::B if command => self.wants_build = true,
                 egui::Key::C if command && modifiers.shift => self.open_picker(),
@@ -693,7 +701,7 @@ impl TexProject {
     /// Keys for the editor, as they came this frame; what it said kept for
     /// the status line, what it yanked put on the clipboard.
     pub(crate) fn input(&mut self, ctx: &egui::Context) {
-        if self.visual.on {
+        if self.visual.pane == Pane::Visual {
             return self.visual_input(ctx);
         }
         let events = ctx.input(|i| i.events.clone());
@@ -711,7 +719,7 @@ impl TexProject {
                     self.forward = true;
                 }
                 egui::Event::Key { key: egui::Key::E, pressed: true, modifiers, .. } if modifiers.mac_cmd || modifiers.command => {
-                    self.set_visual(true, None);
+                    self.set_pane(self.visual.pane.next(), None);
                 }
                 // ⌘C and ⌘X with a selection: yanked and deleted, so the
                 // clipboard gets it as `y` and `d` give it.
@@ -770,7 +778,9 @@ impl TexProject {
         let files = Rect::from_min_size(full.min, vec2(FILES_W, full.height()));
         // Wide enough to read a page in, once there is TeX to make one.
         let ready = matches!(env, Some(quark_lab::tex::TexState::Ready { .. }));
-        let dock_w = if ready { (full.width() * 0.4).clamp(DOCK_W, 760.0) } else { DOCK_W };
+        // Narrower when the source and the page share the middle.
+        let share = if self.visual.pane == Pane::Both { 0.3 } else { 0.4 };
+        let dock_w = if ready { (full.width() * share).clamp(DOCK_W, 760.0) } else { DOCK_W };
         let side = Rect::from_min_max(pos2(full.right() - dock_w, full.top()), full.max);
         let editor = Rect::from_min_max(pos2(files.right() + theme::GAP, full.top()), pos2(side.left() - theme::GAP, full.bottom()));
         let painter = ui.ctx().layer_painter(ui.layer_id());
@@ -805,16 +815,28 @@ impl TexProject {
         let inner = editor.shrink(1.0);
         let status = Rect::from_min_max(pos2(inner.left(), inner.bottom() - STATUS_H), inner.max);
         let panes = Rect::from_min_max(inner.min, pos2(inner.right(), status.top()));
-        if self.visual.on {
-            let asked = self.visual.show(ui, p, &mut self.session, &self.root, panes);
-            self.visual_asked(asked);
-        } else {
-            self.splits(ui, p, panes);
+        match self.visual.pane {
+            Pane::Source => self.splits(ui, p, panes),
+            Pane::Visual => {
+                let asked = self.visual.show(ui, p, &mut self.session, &self.root, panes);
+                self.visual_asked(ui.ctx(), asked);
+            }
+            Pane::Both => {
+                // The source on the left, the page on the right, a hairline
+                // between.
+                let mid = panes.center().x;
+                let source = Rect::from_min_max(panes.min, pos2(mid - 0.5, panes.bottom()));
+                let page = Rect::from_min_max(pos2(mid + 0.5, panes.top()), panes.max);
+                self.splits(ui, p, source);
+                ui.painter().vline(mid, panes.y_range(), egui::Stroke::new(1.0, p.wash(0x18)));
+                let asked = self.visual.show(ui, p, &mut self.session, &self.root, page);
+                self.visual_asked(ui.ctx(), asked);
+            }
         }
         self.status_line(ui, p, status);
-        let switch = Rect::from_min_size(pos2(status.right() - 196.0, status.center().y - 10.0), vec2(116.0, 20.0));
-        if let Some(on) = crate::texvisual::switch(ui, p, switch, self.visual.on) {
-            self.set_visual(on, None);
+        let switch = Rect::from_min_size(pos2(status.right() - 250.0, status.center().y - 10.0), vec2(168.0, 20.0));
+        if let Some(pane) = crate::texvisual::switch(ui, p, switch, self.visual.pane) {
+            self.set_pane(pane, None);
         }
         self.picker_sheet(ui, p);
         asked
@@ -1168,6 +1190,10 @@ impl TexProject {
         if pointer != Pointer::None {
             self.popup.close();
         }
+        // A click in the source takes the keys from the page beside it.
+        if matches!(pointer, Pointer::Click { .. }) {
+            ui.memory_mut(|m| m.stop_text_input());
+        }
         match pointer {
             Pointer::Click { view, line, column } => self.session.click(view, line, column),
             Pointer::Drag { line, column } => self.session.select_to(line, column),
@@ -1237,7 +1263,7 @@ impl TexProject {
         }
         let mode = self.session.mode();
         let (label, fill) = match mode {
-            _ if self.visual.on => ("DOCUMENT", p.accent_alpha(0x90)),
+            _ if self.visual.pane == Pane::Visual || (self.visual.pane == Pane::Both && self.visual.focused) => ("DOCUMENT", p.accent_alpha(0x90)),
             VimMode::Insert => ("INSERT", p.accent),
             VimMode::Replace => ("REPLACE", p.warning),
             VimMode::Visual => ("VISUAL", p.accent_alpha(0xb0)),
@@ -1548,6 +1574,36 @@ while (1) {
         p.open_picker();
         p.cite_chosen();
         assert!(p.session.editor().buffer().contents().contains("\\cite{knuth1984} \\cite{knuth1984}"), "{}", p.session.editor().buffer().contents());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_source_and_the_page_show_side_by_side_and_command_e_steps_through_the_panes() {
+        let root = project("panes");
+        let mut tex = TexProject::open(&root);
+        assert_eq!(tex.visual.pane, Pane::Both, "side by side unless asked");
+        let ctx = egui::Context::default();
+        let press = |tex: &mut TexProject, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| tex.input(ui.ctx()));
+            out.textures_delta.clear();
+        };
+        let key = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        // Beside the page, keys are Vim's.
+        press(&mut tex, vec![egui::Event::Text("O".into()), egui::Event::Text("X".into()), key(egui::Key::Escape, egui::Modifiers::NONE)]);
+        assert!(tex.session.editor().buffer().contents().starts_with("X\n"), "{}", tex.session.editor().buffer().contents());
+        press(&mut tex, vec![key(egui::Key::E, egui::Modifiers::COMMAND)]);
+        assert_eq!(tex.visual.pane, Pane::Visual);
+        // The page alone: Vim hears nothing.
+        press(&mut tex, vec![egui::Event::Text("d".into()), egui::Event::Text("d".into())]);
+        assert!(tex.session.editor().buffer().contents().starts_with("X\n"));
+        press(&mut tex, vec![key(egui::Key::E, egui::Modifiers::COMMAND)]);
+        assert_eq!(tex.visual.pane, Pane::Source);
+        press(&mut tex, vec![key(egui::Key::E, egui::Modifiers::COMMAND)]);
+        assert_eq!(tex.visual.pane, Pane::Both);
+        // Leaving for the page alone ends typing in the source.
+        press(&mut tex, vec![egui::Event::Text("i".into())]);
+        tex.set_pane(Pane::Visual, None);
+        assert_eq!(tex.session.mode(), VimMode::Normal);
         let _ = std::fs::remove_dir_all(root);
     }
 }

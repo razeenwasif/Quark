@@ -308,7 +308,7 @@ impl App {
     /// The visual editor's equations typeset, while it shows and once there
     /// is TeX to do it.
     fn tend_math(&mut self, ctx: &Context) {
-        let Some(tex) = self.tex.as_mut().filter(|t| t.visual.on) else { return };
+        let Some(tex) = self.tex.as_mut().filter(|t| t.visual.pane.page()) else { return };
         let tools = self.tex_env.as_mut().and_then(|e| {
             e.marker().map(|marker| crate::texbuild::Tools {
                 marker,

@@ -83,6 +83,11 @@ impl Drawn {
         }
     }
 
+    /// Whether it takes room on the page.
+    fn shows(&self) -> bool {
+        !matches!(self, Drawn::Nothing)
+    }
+
     /// Its words, when they are edited here.
     fn pieces(&self) -> Option<&[Piece]> {
         match self {
@@ -121,12 +126,40 @@ struct Typing {
     since: Option<Instant>,
 }
 
+/// What the editor's area shows: the source, the page, or both side by
+/// side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Pane {
+    Source,
+    #[default]
+    Both,
+    Visual,
+}
+
+impl Pane {
+    /// Whether the page shows.
+    pub(crate) fn page(self) -> bool {
+        self != Pane::Source
+    }
+
+    /// ⌘E: both, then the page alone, then the source alone.
+    pub(crate) fn next(self) -> Pane {
+        match self {
+            Pane::Both => Pane::Visual,
+            Pane::Visual => Pane::Source,
+            Pane::Source => Pane::Both,
+        }
+    }
+}
+
 /// What the view asks of the workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Asked {
     None,
-    /// Back to the source, the cursor at this character.
+    /// To the source, the cursor at this character.
     Source(usize),
+    /// ⌘E: the next of the panes, the cursor at this character.
+    Step(usize),
     /// The cursor put here and shown in the PDF.
     Forward(usize),
     /// The cursor put here and the cite picker opened.
@@ -136,7 +169,12 @@ pub(crate) enum Asked {
 /// The visual editor's state.
 #[derive(Default)]
 pub(crate) struct Visual {
-    pub on: bool,
+    pub pane: Pane,
+    /// Whether something on the page has the keys.
+    pub(crate) focused: bool,
+    /// The block the source's cursor was last seen in, so the page beside
+    /// it follows it when it moves to another.
+    followed: Option<usize>,
     /// The file and its version the blocks were cut from.
     cut: Option<(Option<PathBuf>, u64)>,
     blocks: Vec<Block>,
@@ -187,6 +225,13 @@ impl Visual {
         if !same_file {
             self.equation = None;
         }
+    }
+
+    /// The pictures read forgotten: a shot's frame drawn nowhere read them
+    /// into another context.
+    #[cfg(test)]
+    pub(crate) fn forget_pictures(&mut self) {
+        self.pictures.clear();
     }
 
     /// Whether there is typing not yet in the source.
@@ -265,6 +310,24 @@ impl Visual {
         self.refresh(session);
         self.tend(session);
         let mut asked = Asked::None;
+        // The block the source's cursor is in: marked beside the source,
+        // and scrolled to when the cursor goes to another — unless the
+        // page has the keys, when the page leads.
+        let beside = self.pane == Pane::Both;
+        let cursor = session.editor().buffer().cursor.offset;
+        let here_block = self
+            .blocks
+            .iter()
+            .position(|b| (b.start as usize) <= cursor && cursor < b.end as usize)
+            .or(self.blocks.len().checked_sub(1));
+        let mut scroll_to = None;
+        if beside && here_block != self.followed {
+            if !self.focused {
+                scroll_to = here_block;
+            }
+            self.followed = here_block;
+        }
+        self.focused = self.equation.is_some();
         let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(area));
         let buffer = session.editor().buffer();
         let file = buffer.path().map(Path::to_path_buf);
@@ -272,7 +335,7 @@ impl Visual {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
                 ui.label(
-                    RichText::new("The visual editor draws .tex files. Open one from the list, or go back to the source: ⌘E.")
+                    RichText::new("The visual editor draws .tex files: open one from the list.")
                         .font(theme::body(13.0))
                         .color(p.text_faint),
                 );
@@ -288,7 +351,7 @@ impl Visual {
             .id_salt("tex-visual")
             .auto_shrink([false, false])
             .show(&mut ui, |ui| {
-                let width = (ui.available_width() - 64.0).clamp(200.0, PAGE_W);
+                let width = (ui.available_width() - 48.0).clamp(200.0, PAGE_W);
                 let margin = ((ui.available_width() - width) / 2.0).max(0.0);
                 ui.add_space(28.0);
                 ui.horizontal(|ui| {
@@ -297,9 +360,28 @@ impl Visual {
                         ui.set_width(width);
                         ui.spacing_mut().item_spacing.y = 0.0;
                         for i in 0..self.blocks.len() {
+                            let top = ui.cursor().top();
                             let got = self.block(ui, p, session, i, width, &here, root);
                             if got != Asked::None {
                                 asked = got;
+                            }
+                            let rect = Rect::from_x_y_ranges(
+                                ui.max_rect().x_range(),
+                                top..=ui.cursor().top().max(top + 1.0),
+                            );
+                            if beside && here_block == Some(i) && self.drawn[i].shows() {
+                                let bar = Rect::from_min_size(
+                                    pos2(rect.left() - 14.0, rect.top()),
+                                    vec2(3.0, rect.height() - 6.0),
+                                );
+                                ui.painter().rect_filled(
+                                    bar,
+                                    CornerRadius::same(2),
+                                    p.accent_alpha(0x90),
+                                );
+                            }
+                            if scroll_to == Some(i) {
+                                ui.scroll_to_rect(rect, Some(egui::Align::Center));
                             }
                         }
                         ui.add_space(120.0);
@@ -497,8 +579,16 @@ impl Visual {
         let focused = ui.memory(|m| m.has_focus(id));
         let mut asked = Asked::None;
         if focused {
+            self.focused = true;
             if self.typing.as_ref().map(|t| t.block) != Some(i) {
                 self.flush(session);
+                // Typing in the source beside ends, as one step to undo; its
+                // cursor comes here, so it shows what is typed.
+                if session.mode() != quark_modal::vim::VimMode::Normal {
+                    session.key(&quark_modal::key::Key::named("Escape"));
+                }
+                session.put_cursor(self.blocks[i].start as usize);
+                self.followed = Some(i);
                 let pieces = self.drawn[i]
                     .pieces()
                     .map(<[Piece]>::to_vec)
@@ -551,8 +641,11 @@ impl Visual {
             if keys[4] {
                 asked = Asked::Forward(at(self));
             }
-            if keys[6] || keys[7] {
+            if keys[6] {
                 asked = Asked::Source(at(self));
+            }
+            if keys[7] {
+                asked = Asked::Step(at(self));
             }
             if keys[8] {
                 asked = Asked::Cite(at(self));
@@ -931,22 +1024,27 @@ fn raw(ui: &mut Ui, p: &Palette, text: &str) -> egui::Response {
         .on_hover_text("Double-click to edit it in the source")
 }
 
-/// The source and visual switch, at `rect`: which was chosen, if one was.
-pub(crate) fn switch(ui: &mut Ui, p: &Palette, rect: Rect, visual: bool) -> Option<bool> {
+/// The panes' switch, at `rect`: which was chosen, if one was.
+pub(crate) fn switch(ui: &mut Ui, p: &Palette, rect: Rect, pane: Pane) -> Option<Pane> {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::same(6), p.recess);
-    let half = rect.width() / 2.0;
+    let third = rect.width() / 3.0;
     let mut chosen = None;
-    for (n, (label, mine)) in [("Source", !visual), ("Visual", visual)]
-        .into_iter()
-        .enumerate()
+    for (n, (label, this)) in [
+        ("Source", Pane::Source),
+        ("Both", Pane::Both),
+        ("Visual", Pane::Visual),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let r = Rect::from_min_size(
-            pos2(rect.left() + half * n as f32, rect.top()),
-            vec2(half, rect.height()),
+            pos2(rect.left() + third * n as f32, rect.top()),
+            vec2(third, rect.height()),
         )
         .shrink(2.0);
         let response = ui.interact(r, ui.id().with(("tex-switch", n)), Sense::click());
+        let mine = this == pane;
         if mine {
             painter.rect_filled(r, CornerRadius::same(5), p.accent_soft);
         }
@@ -965,7 +1063,7 @@ pub(crate) fn switch(ui: &mut Ui, p: &Palette, rect: Rect, visual: bool) -> Opti
             colour,
         );
         if response.clicked() && !mine {
-            chosen = Some(n == 1);
+            chosen = Some(this);
         }
     }
     chosen

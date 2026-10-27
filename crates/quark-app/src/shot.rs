@@ -566,16 +566,23 @@ mod tests {
             size: 241 << 20,
             home: "/Users/you/.quark/tex".into(),
         };
-        for (dark, name) in [(true, "visual-dark.png"), (false, "visual-light.png")] {
+        for (dark, name, pane) in [
+            (true, "visual-both.png", crate::texvisual::Pane::Both),
+            (false, "visual-light.png", crate::texvisual::Pane::Visual),
+        ] {
             let ctx = egui::Context::default();
             theme::install_fonts(&ctx);
             let mode = if dark { ThemeMode::Dark } else { ThemeMode::Light };
             theme::apply(&ctx, mode);
             let p = Palette::for_mode(mode);
             let mut tex = crate::tex::TexProject::open(&root);
-            tex.set_visual(true, None);
+            tex.set_pane(pane, None);
+            // The source's cursor on the list, the page beside following it.
+            tex.session.put_cursor(main.find("\\item the weights").map(|b| main[..b].chars().count()).unwrap());
             // The caret in the first paragraph, as a click puts it there.
-            tex.visual.caret_at = Some(main.find("We draw").map(|b| main[..b].chars().count()).unwrap());
+            if pane == crate::texvisual::Pane::Visual {
+                tex.visual.caret_at = Some(main.find("We draw").map(|b| main[..b].chars().count()).unwrap());
+            }
             // With a TinyTeX named — its programs only; the build is in a
             // folder of its own here — the equations typeset for real.
             if let Some(bin) = std::env::var_os("QUARK_TINYTEX_BIN").map(PathBuf::from) {
@@ -602,13 +609,14 @@ mod tests {
                     });
                 });
                 out.textures_delta.clear();
+                tex.visual.forget_pictures();
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
                 while tex.visual.math.busy() && std::time::Instant::now() < deadline {
                     tex.visual.math.tend(Some(&tools));
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
-            shoot(&ctx, egui::vec2(1320.0, 860.0), 6, &dir.join(name), |ui| {
+            shoot(&ctx, egui::vec2(1512.0, 900.0), 6, &dir.join(name), |ui| {
                 egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
                     tex.show(ui, &p, Some(&ready), &mut crate::texdock::Dock::default(), None);
                 });
