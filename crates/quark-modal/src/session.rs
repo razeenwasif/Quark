@@ -257,6 +257,40 @@ impl Session {
         self.follow();
     }
 
+    /// Characters `start..end` of the file in focus put as `new`, as the
+    /// visual editor writes a block back — only when the file still says
+    /// `old` there, and only what differs changed: one step to undo, the
+    /// cursor after it. Whether it was.
+    pub fn replace(&mut self, start: usize, end: usize, old: &str, new: &str) -> bool {
+        let buf = self.editor.buffer_mut();
+        if start > end || end > buf.len_chars() || buf.slice(Range::new(start, end)) != old {
+            return false;
+        }
+        let old: Vec<char> = old.chars().collect();
+        let new: Vec<char> = new.chars().collect();
+        let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+        let suffix = old[prefix..].iter().rev().zip(new[prefix..].iter().rev()).take_while(|(a, b)| a == b).count();
+        if prefix == old.len() && prefix == new.len() {
+            return true;
+        }
+        let (from, to) = (start + prefix, end - suffix);
+        let text: String = new[prefix..new.len() - suffix].iter().collect();
+        let after = from + text.chars().count();
+        buf.end_group();
+        buf.apply(vec![Edit::replace(Range::new(from, to), text)], Cursor::at(after));
+        buf.end_group();
+        self.follow();
+        true
+    }
+
+    /// The cursor of the file in focus put at character `offset`.
+    pub fn put_cursor(&mut self, offset: usize) {
+        let buf = self.editor.buffer_mut();
+        buf.end_group();
+        buf.cursor = buf.clamp(Cursor::at(offset.min(buf.len_chars())));
+        self.follow();
+    }
+
     /// An action, as if its keys were typed in normal mode.
     pub fn perform(&mut self, action: &Action) {
         let was = self.vim.mode();
@@ -1024,5 +1058,18 @@ mod tests {
         assert_eq!(s.mode(), VimMode::Visual);
         typed(&mut s, "d");
         assert_eq!(s.editor().buffer().contents(), "ala\n");
+    }
+
+    #[test]
+    fn a_span_replaced_changes_only_what_differs_as_one_step_to_undo() {
+        let mut s = with("one two three\nfour\n");
+        assert!(!s.replace(4, 7, "TWO", "2"), "the file no longer says it");
+        assert!(s.replace(4, 13, "two three", "two 3"));
+        assert_eq!(s.editor().buffer().contents(), "one two 3\nfour\n");
+        assert_eq!(s.editor().buffer().cursor.offset, 9, "after what was put in");
+        s.put_cursor(14);
+        assert_eq!(line(&s), 1);
+        s.perform(&Action::new(Verb::Undo, Object::None, 1));
+        assert_eq!(s.editor().buffer().contents(), "one two three\nfour\n", "one step");
     }
 }

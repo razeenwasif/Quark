@@ -31,6 +31,7 @@ mod tab;
 mod tex;
 mod texbuild;
 mod texdock;
+mod texinline;
 mod textures;
 mod viewer;
 
