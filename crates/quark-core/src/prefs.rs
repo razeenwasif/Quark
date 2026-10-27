@@ -118,6 +118,8 @@ pub struct Prefs {
     /// The folders the library's books are in, as typed: `~` is the home
     /// folder.
     pub library_folders: Vec<String>,
+    /// The languages OCR last read in, as tesseract names them.
+    pub ocr_langs: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -155,6 +157,7 @@ impl Default for Prefs {
             theme_dark: true,
             ui_scale: 1.0,
             library_folders: vec!["~/Documents/Books".into()],
+            ocr_langs: vec!["eng".into()],
         }
     }
 }

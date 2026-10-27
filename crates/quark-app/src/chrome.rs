@@ -1156,6 +1156,36 @@ impl App {
         });
     }
 
+    /// How OCR is getting on, and Stop, floating at the top of the canvas.
+    fn ocr_capsule(&mut self, ctx: &Context, p: &Palette, canvas: egui::Rect) {
+        let Some(run) = &self.ocr else { return };
+        let said = if run.done >= run.of {
+            "Laying the words over the pages…".to_string()
+        } else {
+            format!("Reading page {} of {} with OCR…", run.done + 1, run.of)
+        };
+        let mut stop = false;
+        egui::Area::new(egui::Id::new("ocr-capsule"))
+            .order(egui::Order::Middle)
+            .movable(false)
+            .pivot(egui::Align2::CENTER_TOP)
+            .fixed_pos(canvas.center_top() + egui::vec2(0.0, 14.0))
+            .show(ctx, |ui| {
+                widgets::capsule(ui, p, |ui| {
+                    ui.add(egui::Spinner::new().size(13.0));
+                    ui.label(RichText::new(said).font(theme::body(12.5)).color(p.text));
+                    if widgets::ghost_button(ui, p, "Stop").clicked() {
+                        stop = true;
+                    }
+                });
+            });
+        if stop {
+            if let Some(run) = &self.ocr {
+                run.stop();
+            }
+        }
+    }
+
     /// The page and zoom controls, floating at the foot of the canvas.
     fn page_capsule(&mut self, ctx: &Context, p: &Palette, canvas: egui::Rect) {
         let Some(tab) = self.tab() else { return };
@@ -2210,7 +2240,7 @@ impl App {
             }
 
             // --- other ---
-            Command::RecognizeText => self.toast("OCR is not built in yet", false),
+            Command::RecognizeText => self.recognise_text(),
             Command::CompareDocuments => self.toast("Document comparison is not implemented", false),
             Command::ReadOutLoud => self.toast("Read Out Loud is not implemented", false),
             Command::ShowTags | Command::AutoTagDocument => {
@@ -2399,6 +2429,7 @@ impl App {
             DialogResult::InsertBlank { at, size } => {
                 self.apply_op(DocOp::InsertBlankPage { at, size })
             }
+            DialogResult::Ocr { pages, langs } => self.start_ocr(pages, langs),
             DialogResult::Split { every, at } => {
                 let Some(tab) = self.tab() else { return };
                 let stem = tab.path().and_then(|p| p.file_stem()).map_or("Part".into(), |s| s.to_string_lossy().into_owned());
@@ -2929,6 +2960,7 @@ impl eframe::App for App {
             // the status bar's page readout became.
             if !self.home.visible && self.prefs.show_status_bar {
                 self.page_capsule(ctx, &p, area);
+                self.ocr_capsule(ctx, &p, area);
             }
             self.toasts_overlay(ctx, &p, area);
         }
@@ -2940,6 +2972,7 @@ impl eframe::App for App {
             self.books_action(a);
         }
         self.tend_library(ctx);
+        self.tend_ocr(ctx);
 
         // Keep the remembered reading position current.
         if let Some(tab) = self.tab() {

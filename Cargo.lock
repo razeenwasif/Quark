@@ -3151,6 +3151,7 @@ dependencies = [
  "image",
  "quark-ai",
  "quark-core",
+ "quark-lab",
  "quark-pdf",
  "quark-shell",
  "quark-ui",

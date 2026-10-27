@@ -29,7 +29,12 @@ chrono.workspace = true
 # Not Windows-only: the credential calls the assistant makes are used on every
 # platform, and the crate compiles to "not supported" stubs off Windows.
 quark-shell.workspace = true
+# OCR by tesseract, and later TeX.
+quark-lab.workspace = true
 crossbeam-channel.workspace = true
+
+[dev-dependencies]
+quark-pdf = { workspace = true, features = ["testutil"] }
 
 [build-dependencies]
 ico.workspace = true

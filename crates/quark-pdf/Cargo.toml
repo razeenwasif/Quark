@@ -23,5 +23,10 @@ serde_json.workspace = true
 chrono.workspace = true
 rand = "0.9"
 
+[features]
+# The test helpers — a sample PDF, the PDFium lock — for crates that test
+# against this one.
+testutil = []
+
 [dev-dependencies]
 quark-edit = { workspace = true, features = ["fixture"] }

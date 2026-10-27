@@ -36,6 +36,8 @@ pub enum DialogResult {
     InsertBlank { at: usize, size: PageSize },
     /// Split into parts: every so many pages, or at the pages given.
     Split { every: Option<u32>, at: Vec<u32> },
+    /// Pages (from 0) to read with OCR, in these languages.
+    Ocr { pages: Vec<usize>, langs: Vec<String> },
     /// The user confirmed a destructive action.
     Confirmed,
 }
@@ -84,6 +86,18 @@ pub enum Dialog {
         width: String,
         height: String,
     },
+    /// Which pages to read with OCR, and in what languages.
+    Ocr {
+        /// Pages with no words to find.
+        blank: Vec<usize>,
+        /// Those chosen, or the page being read.
+        chosen: Vec<usize>,
+        count: usize,
+        which: crate::ocr::Which,
+        /// What tesseract reads here, and those picked.
+        langs: Vec<String>,
+        picked: Vec<String>,
+    },
     /// How to split a document of `pages` pages.
     Split {
         pages: usize,
@@ -121,6 +135,7 @@ impl Dialog {
             Dialog::ExportImages { .. } => "Export Pages as Images",
             Dialog::InsertBlank { .. } => "Insert Blank Page",
             Dialog::Split { .. } => "Split Document",
+            Dialog::Ocr { .. } => "Recognise Text",
             Dialog::Confirm { title, .. } => title,
             Dialog::Message { title, .. } => title,
             Dialog::About => "About Quark",
@@ -513,6 +528,53 @@ impl Dialog {
                     });
                 }
 
+                Dialog::Ocr { blank, chosen, count, which, langs, picked } => {
+                    use crate::ocr::Which;
+                    ui.label(
+                        RichText::new("Pages that are pictures — scans — are read, and their words laid over them unseen, to find and select. One change to undo.")
+                            .color(p.text_muted)
+                            .size(12.0),
+                    );
+                    ui.add_space(8.0);
+                    let n = |k: usize| if k == 1 { "1 page".to_string() } else { format!("{k} pages") };
+                    ui.add_enabled_ui(!blank.is_empty(), |ui| {
+                        ui.radio_value(which, Which::Blank, format!("Pages with no text ({})", n(blank.len())));
+                    });
+                    ui.radio_value(which, Which::Chosen, format!("Pages chosen ({})", n(chosen.len())));
+                    ui.radio_value(which, Which::Every, format!("Every page ({})", n(*count)));
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Languages").color(p.text_muted).size(12.0));
+                    egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                        // Those picked first, then the rest by name.
+                        let mut order: Vec<String> = picked.clone();
+                        order.extend(langs.iter().filter(|l| !picked.contains(l)).cloned());
+                        for lang in order {
+                            let mut on = picked.contains(&lang);
+                            if ui.checkbox(&mut on, language_name(&lang)).changed() {
+                                if on {
+                                    picked.push(lang.clone());
+                                } else {
+                                    picked.retain(|l| *l != lang);
+                                }
+                            }
+                        }
+                    });
+                    if langs.is_empty() {
+                        ui.label(RichText::new("tesseract has no languages here.").color(p.warning).size(11.5));
+                    }
+                    let pages = crate::ocr::pages_for(*which, blank, chosen, *count);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let ready = !pages.is_empty() && !picked.is_empty();
+                        if ui.add_enabled(ready, egui::Button::new(format!("Read {}", n(pages.len())))).clicked() {
+                            result = DialogResult::Ocr { pages: pages.clone(), langs: picked.clone() };
+                        }
+                        if ui.button("Cancel").clicked() {
+                            result = DialogResult::Cancelled;
+                        }
+                    });
+                }
+
                 Dialog::Split { pages, by_every, every, at } => {
                     ui.label(
                         RichText::new(format!("Into new files, side by side in a folder you choose. {pages} pages."))
@@ -697,6 +759,47 @@ fn stamp_form(
 }
 
 /// Parses a one-based page number, returning a zero-based index.
+/// What tesseract's language codes are called, for the common ones; the
+/// code itself for the rest.
+pub fn language_name(code: &str) -> String {
+    let name = match code {
+        "eng" => "English",
+        "fra" => "French",
+        "deu" => "German",
+        "spa" => "Spanish",
+        "ita" => "Italian",
+        "por" => "Portuguese",
+        "nld" => "Dutch",
+        "swe" => "Swedish",
+        "dan" => "Danish",
+        "nor" => "Norwegian",
+        "fin" => "Finnish",
+        "pol" => "Polish",
+        "ces" => "Czech",
+        "rus" => "Russian",
+        "ukr" => "Ukrainian",
+        "ell" => "Greek",
+        "tur" => "Turkish",
+        "ara" => "Arabic",
+        "heb" => "Hebrew",
+        "hin" => "Hindi",
+        "ben" => "Bengali",
+        "urd" => "Urdu",
+        "fas" => "Persian",
+        "tha" => "Thai",
+        "vie" => "Vietnamese",
+        "ind" => "Indonesian",
+        "jpn" => "Japanese",
+        "kor" => "Korean",
+        "chi_sim" => "Chinese (simplified)",
+        "chi_tra" => "Chinese (traditional)",
+        "lat" => "Latin",
+        "equ" => "Equations",
+        _ => return code.to_string(),
+    };
+    format!("{name} ({code})")
+}
+
 /// A split as typed: every so many pages, or a part starting at each page
 /// given (from 1), and how many files it makes; or why it cannot be.
 pub fn parse_split(by_every: bool, every: &str, at: &str, pages: usize) -> Result<(Option<u32>, Vec<u32>, usize), String> {

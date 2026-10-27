@@ -27,7 +27,7 @@ pub mod security;
 pub mod service;
 pub mod text;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
 
 pub use doc::{DocInfo, Document, Metadata, OpenError, PageInfo, Permissions};

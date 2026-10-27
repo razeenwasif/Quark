@@ -76,6 +76,10 @@ pub enum DocOp {
     SetFieldValue { name: String, value: String },
     /// The form drawn into its pages for good.
     FlattenForm,
+    /// What OCR read of pages (from 0) laid over them, unseen: each page's
+    /// text-only PDF. Refused if the pages have changed since `layout`, when
+    /// they were drawn to be read.
+    Ocr { layout: u64, pages: Vec<(usize, std::sync::Arc<Vec<u8>>)> },
     ClearForm,
 }
 
@@ -109,6 +113,7 @@ impl DocOp {
             DocOp::SetFieldCheck { name, .. } => format!("Toggle \"{name}\""),
             DocOp::SetFieldValue { name, .. } => format!("Fill \"{name}\""),
             DocOp::FlattenForm => "Flatten form".into(),
+            DocOp::Ocr { pages, .. } => format!("Recognise text on {} page(s)", pages.len()),
             DocOp::ClearForm => "Clear form".into(),
         }
     }
@@ -163,6 +168,9 @@ pub enum Request {
         folder: PathBuf,
         stem: String,
     },
+    /// The document as it is now, to read with OCR: its bytes, the pages
+    /// with no text to find, and which layout of its pages they are.
+    OcrPrep { id: DocId },
     /// A book's cover: its first page, no longer than `max_edge` on its long
     /// side — read from `keep` when it is there, and kept there when drawn.
     /// The file is opened for this alone and closed after.
@@ -259,6 +267,13 @@ pub enum Response {
         page: usize,
         token: u64,
         raster: Box<Raster>,
+    },
+    /// The document to read with OCR: `blank` pages (from 0) have no text.
+    OcrPrep {
+        id: DocId,
+        bytes: std::sync::Arc<Vec<u8>>,
+        blank: Vec<usize>,
+        layout: u64,
     },
     /// A cover, or none for a file that cannot be drawn.
     Cover {
@@ -509,6 +524,19 @@ fn handle(req: Request, docs: &mut HashMap<DocId, Document>, edits: &mut Edits, 
                     });
                 }
                 Err(e) => fail(tx, id, &format!("render page {}", request.page + 1), e),
+            }
+        }
+
+        Request::OcrPrep { id } => {
+            let (Some(doc), Some(Ok(edit))) = (docs.get(&id), edits.get(&id)) else {
+                return fail(tx, id, "recognise text", "this document cannot be changed");
+            };
+            match edit.view_bytes() {
+                Ok(bytes) => {
+                    let blank = (0..doc.info.page_count).filter(|&p| !has_words(doc, p)).collect();
+                    let _ = tx.send(Response::OcrPrep { id, bytes: std::sync::Arc::new(bytes), blank, layout: edit.layout() });
+                }
+                Err(e) => fail(tx, id, "recognise text", e),
             }
         }
 
@@ -868,6 +896,13 @@ fn apply_op(id: DocId, op: DocOp, docs: &mut HashMap<DocId, Document>, edits: &m
             Ok(Op::SetField { name, value: if checked { on } else { "Off".into() } })
         }
         DocOp::FlattenForm => Ok(Op::Flatten),
+        DocOp::Ocr { layout, pages } if layout != edit.layout() => {
+            let _ = pages;
+            Err("the pages changed while they were being read — read them again".to_string())
+        }
+        DocOp::Ocr { pages, .. } => {
+            Ok(Op::Ocr { pages: pages.into_iter().map(|(n, words)| (n as u32 + 1, words)).collect() })
+        }
         DocOp::ClearForm => one(
             &label,
             edit.fields()
@@ -980,6 +1015,12 @@ fn reload(
             false
         }
     }
+}
+
+/// Whether a page has words to find: a scan's has none, or a stray few a
+/// scanner stamps.
+fn has_words(doc: &Document, page: usize) -> bool {
+    crate::text::extract_page(doc, page).is_ok_and(|t| t.text.chars().filter(|c| !c.is_whitespace()).count() > 16)
 }
 
 /// Some pages, as they are now, as a PDF of their own.
@@ -1629,6 +1670,49 @@ mod tests {
             _ => None,
         });
         assert!(!info.encrypted);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn what_ocr_read_is_laid_over_its_pages_unless_they_changed_meanwhile() {
+        let _g = testutil::pdfium_guard();
+        // A page of words, and two with none — as a scan's.
+        let mut lo = lopdf::Document::load_mem(&quark_edit::fixture::fixture(&["A page that has plenty of words on it", "", ""])).unwrap();
+        let path = testutil::tmp_path("svc-ocr.pdf");
+        lo.save(&path).unwrap();
+        let svc = PdfService::start();
+        let id = svc.new_doc_id();
+        svc.send(Request::Open { id, path: path.clone(), password: None });
+        wait_for(&svc, |r| matches!(r, Response::Opened { .. }).then_some(()));
+        let prep = || {
+            svc.send(Request::OcrPrep { id });
+            wait_for(&svc, |r| match r {
+                Response::OcrPrep { blank, layout, bytes, .. } => Some((blank.clone(), *layout, bytes.len())),
+                _ => None,
+            })
+        };
+        let (blank, layout, size) = prep();
+        assert_eq!(blank, [1, 2], "the pages with no words");
+        assert!(size > 0);
+
+        // What tesseract writes for a page: words of its own, unseen.
+        let words = std::sync::Arc::new(quark_edit::fixture::fixture(&["Recognised words from a scan"]));
+        svc.send(Request::Apply { id, op: Box::new(DocOp::Ocr { layout, pages: vec![(1, words.clone())] }) });
+        let info = applied(&svc);
+        assert_eq!(info.undo.as_deref(), Some("make a page searchable"));
+        let (blank, layout, _) = prep();
+        assert_eq!(blank, [2], "page 2 has words to find now");
+
+        // A page deleted meanwhile — the rest move up one: refused.
+        svc.send(Request::Apply { id, op: Box::new(DocOp::DeletePages(vec![0])) });
+        applied(&svc);
+        svc.send(Request::Apply { id, op: Box::new(DocOp::Ocr { layout, pages: vec![(2, words)] }) });
+        let refused = wait_for(&svc, |r| match r {
+            Response::Failed { error, .. } => Some(error.clone()),
+            Response::Applied { .. } => panic!("laid over pages that had changed"),
+            _ => None,
+        });
+        assert!(refused.contains("changed"), "{refused}");
         let _ = std::fs::remove_file(path);
     }
 

@@ -67,6 +67,11 @@ pub struct App {
     pub(crate) home: crate::home::HomeState,
     /// The books in the person's folders, walked on a worker.
     pub(crate) library: quark_pdf::library::Library,
+    /// Pages being read with OCR, behind the window.
+    pub(crate) ocr: Option<crate::ocr::OcrRun>,
+    /// A document as it was when OCR was asked for, while its pages and
+    /// languages are chosen: its bytes and which layout of its pages.
+    pub(crate) ocr_prep: Option<(quark_pdf::service::DocId, std::sync::Arc<Vec<u8>>, u64)>,
     /// The side panel to bring back when the pages island is reopened.
     pub(crate) last_side_panel: SidePanel,
     /// The highlighted row in the command palette.
@@ -138,6 +143,8 @@ impl App {
             dock_open: true,
             home: crate::home::HomeState::default(),
             library: library_kept(),
+            ocr: None,
+            ocr_prep: None,
             last_side_panel: SidePanel::Thumbnails,
             palette_index: 0,
             palette_was_open: false,
@@ -163,6 +170,63 @@ impl App {
         shelf.folders = self.library.folders().to_vec();
         shelf.missing = self.library.missing();
         shelf.walking = self.library.walking();
+    }
+
+    /// Read pages with OCR: what this document is now, then its pages and
+    /// languages chosen.
+    pub(crate) fn recognise_text(&mut self) {
+        if self.ocr.is_some() {
+            self.toast("Pages are being read already", false);
+            return;
+        }
+        if quark_lab::ocr::Tesseract::find().is_none() {
+            self.dialog = Some(Dialog::Message {
+                title: "Recognise Text".into(),
+                body: "OCR reads pages with tesseract, which is not on this Mac. It is installed with Homebrew: brew install tesseract".into(),
+                error: false,
+            });
+            return;
+        }
+        if let Some(t) = self.tab() {
+            self.service.send(Request::OcrPrep { id: t.id });
+        }
+    }
+
+    /// The pages and languages chosen: the reading started.
+    pub(crate) fn start_ocr(&mut self, pages: Vec<usize>, langs: Vec<String>) {
+        let Some((doc, bytes, layout)) = self.ocr_prep.take() else { return };
+        let Some(tesseract) = quark_lab::ocr::Tesseract::find() else { return };
+        if pages.is_empty() {
+            return;
+        }
+        self.prefs.ocr_langs = langs.clone();
+        save_prefs(&self.prefs);
+        self.ocr = Some(crate::ocr::OcrRun::start(doc, layout, bytes, pages, langs, tesseract));
+    }
+
+    /// How the reading is getting on: once a frame. What it read is laid
+    /// over its pages as one change, if its document is still open.
+    pub(crate) fn tend_ocr(&mut self, ctx: &Context) {
+        let Some(run) = self.ocr.as_mut() else { return };
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        let Some(end) = run.poll() else { return };
+        let (doc, layout) = (run.doc, run.layout);
+        self.ocr = None;
+        match end {
+            crate::ocr::OcrNews::Done(pages) => {
+                if self.tabs.iter().any(|t| t.id == doc) {
+                    let n = pages.len();
+                    self.service.send(Request::Apply { id: doc, op: Box::new(DocOp::Ocr { layout, pages }) });
+                    self.toast(
+                        format!("Read {n} page{} — their words can be found and selected", if n == 1 { "" } else { "s" }),
+                        false,
+                    );
+                }
+            }
+            crate::ocr::OcrNews::Stopped => self.toast("OCR stopped — nothing was changed", false),
+            crate::ocr::OcrNews::Failed(why) => self.toast(format!("OCR: {why}"), true),
+            crate::ocr::OcrNews::Read(_) => {}
+        }
     }
 
     /// What the library asked for.
@@ -553,6 +617,28 @@ impl App {
                         self.prefs.tint,
                     );
                     self.textures.insert(ctx, key, &raster);
+                }
+
+                Response::OcrPrep { id, bytes, blank, layout } => {
+                    let Some(tesseract) = quark_lab::ocr::Tesseract::find() else { continue };
+                    let Some(tab) = self.tabs.iter().find(|t| t.id == id) else { continue };
+                    let chosen = if tab.selected_pages.is_empty() {
+                        vec![tab.current_page]
+                    } else {
+                        let mut c = tab.selected_pages.clone();
+                        c.sort_unstable();
+                        c
+                    };
+                    let count = tab.page_count();
+                    let langs = tesseract.languages();
+                    let mut picked: Vec<String> =
+                        self.prefs.ocr_langs.iter().filter(|l| langs.contains(l)).cloned().collect();
+                    if picked.is_empty() {
+                        picked = langs.iter().find(|l| *l == "eng").or(langs.first()).cloned().into_iter().collect();
+                    }
+                    let which = if blank.is_empty() { crate::ocr::Which::Chosen } else { crate::ocr::Which::Blank };
+                    self.ocr_prep = Some((id, bytes, layout));
+                    self.dialog = Some(crate::dialogs::Dialog::Ocr { blank, chosen, count, which, langs, picked });
                 }
 
                 Response::Cover { path, raster } => {
