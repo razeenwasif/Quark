@@ -1,0 +1,15 @@
+[package]
+name = "quark-modal"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vim for Quark's editor: the modal engine, what its actions do to a buffer, splits, ex commands and typing."
+
+[dependencies]
+quark-text = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+quark-text = { workspace = true }

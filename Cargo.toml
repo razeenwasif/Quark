@@ -12,6 +12,7 @@ members = [
     "crates/quark-lsp",
     "crates/quark-edit",
     "crates/quark-lab",
+    "crates/quark-modal",
     "xtask",
 ]
 
@@ -30,6 +31,7 @@ default-members = [
     "crates/quark-lsp",
     "crates/quark-edit",
     "crates/quark-lab",
+    "crates/quark-modal",
 ]
 
 [workspace.package]
@@ -51,6 +53,7 @@ quark-tex = { path = "crates/quark-tex" }
 quark-lsp = { path = "crates/quark-lsp" }
 quark-edit = { path = "crates/quark-edit" }
 quark-lab = { path = "crates/quark-lab" }
+quark-modal = { path = "crates/quark-modal" }
 
 # --- ui ---
 egui = "0.36"
