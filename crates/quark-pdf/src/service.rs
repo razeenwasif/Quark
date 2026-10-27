@@ -146,6 +146,23 @@ pub enum Request {
         tint: PageTint,
         token: u64,
     },
+    /// Pages (from 0), in the order given, written as a PDF of their own at
+    /// `path`. The document is not changed.
+    ExtractTo {
+        id: DocId,
+        pages: Vec<usize>,
+        path: PathBuf,
+    },
+    /// The document written as parts into `folder` — a part every `every`
+    /// pages, or one starting at each of `at` (pages from 1) — named
+    /// `<stem>-1.pdf` and on. No file already there is written over.
+    SplitTo {
+        id: DocId,
+        every: Option<u32>,
+        at: Vec<u32>,
+        folder: PathBuf,
+        stem: String,
+    },
     /// A book's cover: its first page, no longer than `max_edge` on its long
     /// side — read from `keep` when it is there, and kept there when drawn.
     /// The file is opened for this alone and closed after.
@@ -421,6 +438,9 @@ fn told(mut info: DocInfo, edit: Option<&Result<Box<Edit>, String>>) -> DocInfo 
             info.redo = edit.redoable();
             info.dirty = edit.dirty();
             info.read_only = None;
+            // Whether it will be saved with a password: what is drawn never
+            // has one, so PDFium cannot say.
+            info.encrypted = edit.protected();
         }
         Some(Err(why)) => {
             info.undo = None;
@@ -491,6 +511,28 @@ fn handle(req: Request, docs: &mut HashMap<DocId, Document>, edits: &mut Edits, 
                 Err(e) => fail(tx, id, &format!("render page {}", request.page + 1), e),
             }
         }
+
+        Request::ExtractTo { id, pages, path } => match edits.get(&id) {
+            Some(Ok(edit)) => match extract_to(edit, &pages, &path) {
+                Ok(()) => {
+                    let _ = tx.send(Response::Exported { id, paths: vec![path] });
+                }
+                Err(e) => fail(tx, id, "extract pages", e),
+            },
+            Some(Err(why)) => fail(tx, id, "extract pages", why.clone()),
+            None => {}
+        },
+
+        Request::SplitTo { id, every, at, folder, stem } => match edits.get(&id) {
+            Some(Ok(edit)) => match split_to(edit, every, &at, &folder, &stem) {
+                Ok(paths) => {
+                    let _ = tx.send(Response::Exported { id, paths });
+                }
+                Err(e) => fail(tx, id, "split", e),
+            },
+            Some(Err(why)) => fail(tx, id, "split", why.clone()),
+            None => {}
+        },
 
         Request::Cover { path, max_edge, keep } => {
             let raster = cover(&path, max_edge, keep.as_deref());
@@ -940,6 +982,31 @@ fn reload(
     }
 }
 
+/// Some pages, as they are now, as a PDF of their own.
+fn extract_to(edit: &Edit, pages: &[usize], path: &Path) -> Result<(), String> {
+    let numbers: Vec<u32> = pages.iter().map(|p| *p as u32 + 1).collect();
+    let bytes = quark_edit::combine::extract(edit.document(), &numbers)?;
+    crate::library::write_atomically(path, &bytes).map_err(|e| format!("{} could not be written: {e}", path.display()))
+}
+
+/// The document, as it is now, as parts in a folder. Nothing is written if
+/// any part's file is there already.
+fn split_to(edit: &Edit, every: Option<u32>, at: &[u32], folder: &Path, stem: &str) -> Result<Vec<PathBuf>, String> {
+    let parts = quark_edit::combine::ranges(edit.pages(), every, at)?;
+    let width = parts.len().to_string().len();
+    let paths: Vec<PathBuf> =
+        (1..=parts.len()).map(|n| folder.join(format!("{stem}-{n:0width$}.pdf"))).collect();
+    if let Some(there) = paths.iter().find(|p| p.exists()) {
+        return Err(format!("{} is there already", there.display()));
+    }
+    for (numbers, path) in parts.iter().zip(&paths) {
+        let bytes = quark_edit::combine::extract(edit.document(), numbers)?;
+        crate::library::write_atomically(path, &bytes)
+            .map_err(|e| format!("{} could not be written: {e}", path.display()))?;
+    }
+    Ok(paths)
+}
+
 /// A book's first page, drawn — or read from where it was kept.
 fn cover(path: &Path, max_edge: u32, keep: Option<&Path>) -> Option<Raster> {
     if let Some(kept) = keep.and_then(|k| image::open(k).ok()) {
@@ -967,7 +1034,8 @@ mod tests {
     use crate::testutil;
     use std::time::{Duration, Instant};
 
-    /// Waits for a response satisfying `pred`, failing the test on timeout.
+    /// Waits for a response satisfying `pred`, failing the test on timeout
+    /// or on a failure `pred` does not take.
     fn wait_for<T>(
         svc: &PdfService,
         mut pred: impl FnMut(&Response) -> Option<T>,
@@ -979,11 +1047,13 @@ mod tests {
             }
             match svc.recv_blocking() {
                 Some(r) => {
-                    if let Response::Failed { what, error, .. } = &r {
-                        panic!("worker failed during {what}: {error}");
-                    }
+                    // A failure a test waits for is its to take; any other
+                    // fails the test.
                     if let Some(v) = pred(&r) {
                         return v;
+                    }
+                    if let Response::Failed { what, error, .. } = &r {
+                        panic!("worker failed during {what}: {error}");
                     }
                 }
                 None => panic!("worker disconnected"),
@@ -1455,6 +1525,111 @@ mod tests {
             _ => None,
         });
         assert!(none, "a file that is not there has no cover");
+    }
+
+    fn pages_of(svc: &PdfService, path: &Path) -> Vec<String> {
+        let id = svc.new_doc_id();
+        svc.send(Request::Open { id, path: path.to_path_buf(), password: None });
+        let info = wait_for(svc, |r| match r {
+            Response::Opened { id: i, info } if *i == id => Some((**info).clone()),
+            _ => None,
+        });
+        let words = (0..info.page_count)
+            .map(|page| {
+                svc.send(Request::PageText { id, page });
+                wait_for(svc, |r| match r {
+                    Response::PageText { id: i, page: p, text } if *i == id && *p == page => Some(text.text.trim().to_string()),
+                    _ => None,
+                })
+            })
+            .collect();
+        svc.send(Request::Close { id });
+        words
+    }
+
+    #[test]
+    fn pages_are_extracted_and_a_document_split_into_files_of_their_own() {
+        let _g = testutil::pdfium_guard();
+        let source = testutil::tmp_path("svc-split.pdf");
+        std::fs::write(&source, quark_edit::fixture::fixture(&["One", "Two", "Three", "Four", "Five"])).unwrap();
+        let folder = testutil::tmp_path("svc-split-parts");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let svc = PdfService::start();
+        let id = svc.new_doc_id();
+        svc.send(Request::Open { id, path: source.clone(), password: None });
+        wait_for(&svc, |r| matches!(r, Response::Opened { .. }).then_some(()));
+
+        // In the order chosen; the document itself unchanged.
+        let out = folder.join("chosen.pdf");
+        svc.send(Request::ExtractTo { id, pages: vec![3, 0], path: out.clone() });
+        let paths = wait_for(&svc, |r| match r {
+            Response::Exported { paths, .. } => Some(paths.clone()),
+            _ => None,
+        });
+        assert_eq!(paths, [out.clone()]);
+        assert_eq!(pages_of(&svc, &out), ["Four", "One"]);
+
+        svc.send(Request::SplitTo { id, every: Some(2), at: vec![], folder: folder.clone(), stem: "book".into() });
+        let parts = wait_for(&svc, |r| match r {
+            Response::Exported { paths, .. } => Some(paths.clone()),
+            Response::Failed { error, .. } => panic!("{error}"),
+            _ => None,
+        });
+        let names: Vec<String> = parts.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["book-1.pdf", "book-2.pdf", "book-3.pdf"]);
+        assert_eq!(pages_of(&svc, &parts[1]), ["Three", "Four"]);
+        assert_eq!(pages_of(&svc, &parts[2]), ["Five"]);
+
+        // Split again into the same folder: nothing written over.
+        let before = std::fs::read(&parts[0]).unwrap();
+        svc.send(Request::SplitTo { id, every: None, at: vec![3], folder: folder.clone(), stem: "book".into() });
+        let refused = wait_for(&svc, |r| match r {
+            Response::Failed { error, .. } => Some(error.clone()),
+            Response::Exported { .. } => panic!("a part was written over"),
+            _ => None,
+        });
+        assert!(refused.contains("there already"), "{refused}");
+        assert_eq!(std::fs::read(&parts[0]).unwrap(), before);
+        let _ = std::fs::remove_dir_all(folder);
+        let _ = std::fs::remove_file(source);
+    }
+
+    #[test]
+    fn a_password_removed_is_saved_without_one_and_said_so() {
+        let _g = testutil::pdfium_guard();
+        let path = testutil::tmp_path("svc-locked.pdf");
+        let mut lo = lopdf::Document::load_mem(&quark_edit::fixture::fixture(&["Secret"])).unwrap();
+        let protection = quark_edit::security::Protection { user: "open".into(), owner: "own".into(), print: true, copy: true, edit: true };
+        quark_edit::security::protect(&mut lo, &protection).unwrap();
+        let mut bytes = Vec::new();
+        lo.save_to(&mut bytes).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+
+        let svc = PdfService::start();
+        let id = svc.new_doc_id();
+        svc.send(Request::Open { id, path: path.clone(), password: Some("open".into()) });
+        let info = wait_for(&svc, |r| match r {
+            Response::Opened { info, .. } => Some((**info).clone()),
+            Response::PasswordRequired { .. } => panic!("the password did not open it"),
+            _ => None,
+        });
+        assert!(info.encrypted && info.read_only.is_none(), "{info:?}");
+        svc.send(Request::Apply { id, op: Box::new(DocOp::Decrypt { password: String::new() }) });
+        let info = applied(&svc);
+        assert!(!info.encrypted, "it will be saved without a password");
+        svc.send(Request::Save { id, path: None });
+        wait_for(&svc, |r| matches!(r, Response::Saved { .. }).then_some(()));
+        // Opened with no password at all.
+        let again = svc.new_doc_id();
+        svc.send(Request::Open { id: again, path: path.clone(), password: None });
+        let info = wait_for(&svc, |r| match r {
+            Response::Opened { id: i, info } if *i == again => Some((**info).clone()),
+            Response::PasswordRequired { .. } => panic!("still asks for its password"),
+            _ => None,
+        });
+        assert!(!info.encrypted);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

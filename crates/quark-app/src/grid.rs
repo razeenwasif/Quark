@@ -31,6 +31,8 @@ pub(crate) enum GridAction {
     /// A blank page after the last chosen.
     Blank,
     Delete,
+    /// The pages chosen, into a file of their own.
+    Extract,
     /// The pages chosen moved to before page `before` (the page count for the
     /// end).
     Move { pages: Vec<usize>, before: usize },
@@ -124,6 +126,9 @@ pub(crate) fn show(
                 let keeps_one = n < count;
                 if ui.add_enabled(some && keeps_one, egui::Button::new("Delete")).on_hover_text("⌫").clicked() {
                     action = GridAction::Delete;
+                }
+                if ui.add_enabled(some, egui::Button::new("Extract…")).on_hover_text("Into a file of their own").clicked() {
+                    action = GridAction::Extract;
                 }
                 if ui.add_enabled(some, egui::Button::new("+ Blank")).on_hover_text("A blank page after").clicked() {
                     action = GridAction::Blank;

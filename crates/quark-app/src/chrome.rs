@@ -1778,16 +1778,33 @@ impl App {
                     self.service.send(Request::ExportText { id: tab.id, path });
                 }
             }
+            // Into a file of their own; the document is left as it is.
             Command::ExtractPages => {
                 let pages = self.target_pages();
-                if !pages.is_empty() {
-                    self.apply_op(DocOp::ExtractPages(pages));
+                let Some(tab) = self.tab() else { return };
+                if pages.is_empty() {
+                    return;
+                }
+                let stem = tab.path().and_then(|p| p.file_stem()).map_or("Pages".into(), |s| s.to_string_lossy().into_owned());
+                let name = format!("{stem} (pages {}).pdf", crate::dialogs::pages_said(&pages));
+                let mut ask = rfd::FileDialog::new().add_filter("PDF documents", &["pdf"]).set_file_name(&name);
+                if let Some(dir) = tab.path().and_then(|p| p.parent()) {
+                    ask = ask.set_directory(dir);
+                }
+                if let Some(path) = ask.save_file() {
+                    self.service.send(Request::ExtractTo { id: tab.id, pages, path });
                 }
             }
-            Command::SplitDocument => self.toast(
-                "Use Pages ▸ Extract Pages with a thumbnail selection to split a document",
-                false,
-            ),
+            Command::SplitDocument => {
+                if let Some(t) = self.tab() {
+                    self.dialog = Some(Dialog::Split {
+                        pages: t.page_count(),
+                        by_every: true,
+                        every: "1".into(),
+                        at: String::new(),
+                    });
+                }
+            }
             Command::Optimize => self.apply_op(DocOp::Optimize),
 
             // --- edit ---
@@ -2131,8 +2148,10 @@ impl App {
                     permissions: quark_pdf::security::PermissionSet::default(),
                 });
             }
+            // Undone like any change; kept once saved.
             Command::RemoveSecurity => {
-                self.toast("Reopen the document with its password, then Save As", false)
+                self.apply_op(DocOp::Decrypt { password: String::new() });
+                self.toast("Its password goes when it is saved", false);
             }
             Command::RestrictEditing => self.dispatch(Command::EncryptWithPassword, ctx),
             Command::MarkForRedaction => self.tool = Tool::Redact,
@@ -2380,6 +2399,17 @@ impl App {
             DialogResult::InsertBlank { at, size } => {
                 self.apply_op(DocOp::InsertBlankPage { at, size })
             }
+            DialogResult::Split { every, at } => {
+                let Some(tab) = self.tab() else { return };
+                let stem = tab.path().and_then(|p| p.file_stem()).map_or("Part".into(), |s| s.to_string_lossy().into_owned());
+                let mut ask = rfd::FileDialog::new().set_title("Split into this folder");
+                if let Some(dir) = tab.path().and_then(|p| p.parent()) {
+                    ask = ask.set_directory(dir);
+                }
+                if let Some(folder) = ask.pick_folder() {
+                    self.service.send(Request::SplitTo { id: tab.id, every, at, folder, stem });
+                }
+            }
             DialogResult::Confirmed => match &dialog {
                 Dialog::Confirm { title, .. } if title == "Apply Redactions" => {
                     let marks = self.redaction_marks();
@@ -2581,6 +2611,7 @@ impl App {
                 self.dispatch(if cw { Command::RotatePagesCw } else { Command::RotatePagesCcw }, ctx)
             }
             GridAction::Delete => self.dispatch(Command::DeletePages, ctx),
+            GridAction::Extract => self.dispatch(Command::ExtractPages, ctx),
             GridAction::Blank => {
                 let Some(t) = self.tab() else { return };
                 let Some(&last) = t.selected_pages.iter().max() else { return };

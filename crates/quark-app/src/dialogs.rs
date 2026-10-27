@@ -34,6 +34,8 @@ pub enum DialogResult {
     Bates(Box<BatesOptions>),
     ExportImages(ImageExport),
     InsertBlank { at: usize, size: PageSize },
+    /// Split into parts: every so many pages, or at the pages given.
+    Split { every: Option<u32>, at: Vec<u32> },
     /// The user confirmed a destructive action.
     Confirmed,
 }
@@ -82,6 +84,13 @@ pub enum Dialog {
         width: String,
         height: String,
     },
+    /// How to split a document of `pages` pages.
+    Split {
+        pages: usize,
+        by_every: bool,
+        every: String,
+        at: String,
+    },
     /// A yes/no confirmation for something irreversible.
     Confirm {
         title: String,
@@ -111,6 +120,7 @@ impl Dialog {
             Dialog::Bates { .. } => "Bates Numbering",
             Dialog::ExportImages { .. } => "Export Pages as Images",
             Dialog::InsertBlank { .. } => "Insert Blank Page",
+            Dialog::Split { .. } => "Split Document",
             Dialog::Confirm { title, .. } => title,
             Dialog::Message { title, .. } => title,
             Dialog::About => "About Quark",
@@ -503,6 +513,48 @@ impl Dialog {
                     });
                 }
 
+                Dialog::Split { pages, by_every, every, at } => {
+                    ui.label(
+                        RichText::new(format!("Into new files, side by side in a folder you choose. {pages} pages."))
+                            .color(p.text_muted)
+                            .size(12.0),
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.radio_value(by_every, true, "Every");
+                        ui.add_enabled(*by_every, egui::TextEdit::singleline(every).desired_width(48.0));
+                        ui.label("pages");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.radio_value(by_every, false, "At pages");
+                        ui.add_enabled(
+                            !*by_every,
+                            egui::TextEdit::singleline(at).hint_text("e.g. 5, 12").desired_width(160.0),
+                        );
+                    });
+                    let parsed = parse_split(*by_every, every, at, *pages);
+                    ui.add_space(4.0);
+                    match &parsed {
+                        Ok((_, _, parts)) => {
+                            ui.label(RichText::new(format!("Makes {parts} files.")).color(p.text_faint).size(11.5));
+                        }
+                        Err(why) => {
+                            ui.label(RichText::new(why.as_str()).color(p.warning).size(11.5));
+                        }
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(parsed.is_ok(), egui::Button::new("Choose Folder…")).clicked() {
+                            if let Ok((every, at, _)) = parsed {
+                                result = DialogResult::Split { every, at };
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            result = DialogResult::Cancelled;
+                        }
+                    });
+                }
+
                 Dialog::Confirm {
                     body,
                     confirm_label,
@@ -645,6 +697,56 @@ fn stamp_form(
 }
 
 /// Parses a one-based page number, returning a zero-based index.
+/// A split as typed: every so many pages, or a part starting at each page
+/// given (from 1), and how many files it makes; or why it cannot be.
+pub fn parse_split(by_every: bool, every: &str, at: &str, pages: usize) -> Result<(Option<u32>, Vec<u32>, usize), String> {
+    if by_every {
+        let n: usize = every.trim().parse().map_err(|_| "Say how many pages each file holds.".to_string())?;
+        if n == 0 {
+            return Err("Each file holds one page or more.".into());
+        }
+        if n >= pages {
+            return Err(format!("Every {n} pages makes one file: the document as it is."));
+        }
+        return Ok((Some(n as u32), Vec::new(), pages.div_ceil(n)));
+    }
+    let mut starts = Vec::new();
+    for word in at.split(|c: char| c == ',' || c.is_whitespace()).filter(|w| !w.is_empty()) {
+        let n: usize = word.parse().map_err(|_| format!("“{word}” is not a page number."))?;
+        if n < 2 || n > pages {
+            return Err(format!("A part can start at pages 2 to {pages}."));
+        }
+        starts.push(n as u32);
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.is_empty() {
+        return Err("Say the pages new files start at.".into());
+    }
+    let parts = starts.len() + 1;
+    Ok((None, starts, parts))
+}
+
+/// Pages (from 0) as a person says them: 3–5, or 1, 4, 7–9.
+pub fn pages_said(pages: &[usize]) -> String {
+    let mut sorted: Vec<usize> = pages.iter().map(|p| p + 1).collect();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut runs: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let start = sorted[i];
+        let mut end = start;
+        while i + 1 < sorted.len() && sorted[i + 1] == end + 1 {
+            i += 1;
+            end = sorted[i];
+        }
+        runs.push(if end == start { start.to_string() } else { format!("{start}–{end}") });
+        i += 1;
+    }
+    runs.join(", ")
+}
+
 /// A page by its label — the document's own, when it has them — or else by
 /// its number. A book whose page 1 is the fifth page goes to the fifth.
 pub fn parse_page_or_label(entry: &str, max: usize, labels: &[String]) -> Option<usize> {
@@ -691,6 +793,16 @@ mod tests {
     #[test]
     fn page_entry_tolerates_surrounding_whitespace() {
         assert_eq!(parse_page("  4 ", 10), Some(3));
+        assert_eq!(pages_said(&[4, 2, 3]), "3–5");
+        assert_eq!(pages_said(&[0, 3, 6, 7, 8]), "1, 4, 7–9");
+        assert_eq!(parse_split(true, "2", "", 5), Ok((Some(2), vec![], 3)));
+        assert_eq!(parse_split(false, "", "12, 5 5", 20), Ok((None, vec![5, 12], 3)));
+        assert!(parse_split(true, "5", "", 5).is_err(), "one file is the document as it is");
+        assert!(parse_split(true, "0", "", 5).is_err());
+        assert!(parse_split(false, "", "1", 5).is_err(), "page 1 starts the first file already");
+        assert!(parse_split(false, "", "9", 5).is_err());
+        assert!(parse_split(false, "", "two", 5).is_err());
+        assert!(parse_split(false, "", " ", 5).is_err());
         let labels: Vec<String> = ["i", "ii", "1", "2"].map(String::from).to_vec();
         assert_eq!(parse_page_or_label("II", 4, &labels), Some(1));
         assert_eq!(parse_page_or_label("1", 4, &labels), Some(2), "the label, not the first page");
