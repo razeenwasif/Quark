@@ -1,0 +1,16 @@
+[package]
+name = "quark-syntax"
+description = "Syntax highlighting for Quark's editor, from Proton's: tree-sitter parsing and viewport-scoped queries, for LaTeX."
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+quark-text = { workspace = true }
+serde = { workspace = true }
+ropey = "1.6"
+tree-sitter = "0.27"
+# latex-lsp's grammar, which texlab is written against.
+codebook-tree-sitter-latex = "0.6"
