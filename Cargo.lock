@@ -3167,6 +3167,7 @@ dependencies = [
  "quark-pdf",
  "quark-shell",
  "quark-syntax",
+ "quark-tex",
  "quark-text",
  "quark-ui",
  "rfd",

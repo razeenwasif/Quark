@@ -230,7 +230,7 @@ fn paint_cell(
     );
     // Kept under the side panel's key, so the two share their pictures.
     let scale = edge as f32 / size.width.max(size.height).max(1.0);
-    let key = PageKey::new(page, scale, quark_core::geom::Rot::D0, prefs.tint);
+    let key = PageKey::new(page, scale, quark_core::geom::Rot::D0, prefs.tint).of(tab.id);
     match textures.get(&key) {
         Some(tex) => {
             painter.add(

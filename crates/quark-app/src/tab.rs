@@ -109,6 +109,11 @@ pub struct Tab {
 
     // --- interaction ---
     pub selection: Option<TextSelection>,
+    /// A place lit for a moment — where SyncTeX found a line — on a page,
+    /// in page space, and when it was first drawn.
+    pub flash: Option<(usize, Rect, Option<f64>)>,
+    /// For a LaTeX build's PDF, which build made it.
+    pub pdf_version: u64,
     pub selected_annotation: Option<AnnotId>,
     pub selected_pages: Vec<usize>,
     /// The page grid is shown in place of the pages.
@@ -261,6 +266,8 @@ impl Tab {
             page_text: HashMap::new(),
             text_pending: Vec::new(),
             selection: None,
+            flash: None,
+            pdf_version: 0,
             selected_annotation: None,
             selected_pages: Vec::new(),
             grid: false,

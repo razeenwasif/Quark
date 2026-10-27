@@ -268,7 +268,7 @@ mod tests {
                     rgba[at..at + 3].copy_from_slice(&[150, 150, 158]);
                 }
             }
-            let key = crate::textures::PageKey::new(page, scale, quark_core::geom::Rot::D0, prefs.tint);
+            let key = crate::textures::PageKey::new(page, scale, quark_core::geom::Rot::D0, prefs.tint).of(tab.id);
             textures.insert(&ctx, key, &Raster { width: w, height: h, rgba });
         }
         shoot(&ctx, egui::vec2(1100.0, 760.0), 4, &dir.join("page-grid.png"), |ui| {
@@ -344,7 +344,7 @@ mod tests {
             keys(s, "10G$");
             shoot(&ctx, egui::vec2(1320.0, 820.0), 4, &dir.join(name), |ui| {
                 egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
-                    tex.show(ui, &p, Some(&env), &mut crate::texdock::Dock::default());
+                    tex.show(ui, &p, Some(&env), &mut crate::texdock::Dock::default(), None);
                 });
             })
             .unwrap();
@@ -397,12 +397,73 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(15));
             tex.poll();
             egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
-                tex.show(ui, &p, Some(&ready), &mut dock);
+                tex.show(ui, &p, Some(&ready), &mut dock, None);
             });
         })
         .unwrap();
         assert!(frames > 0);
         drop(tex);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "draws pictures; run with QUARK_SHOTS set"]
+    fn shot_a_build_in_the_dock() {
+        use quark_pdf::service::{PdfService, Request, Response};
+        let Some(dir) = folder() else { return };
+        let (root, tools) = crate::texbuild::tests::bench("shot");
+        std::fs::write(
+            root.join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\\foo\n\\section{Intro}\\label{sec:i}\nSee Section~\\ref{sec:x}.\n\\section{Method}\n\\subsection{Sampling}\n\\end{document}\n",
+        )
+        .unwrap();
+        let mut tex = crate::tex::TexProject::open(&root);
+        tex.builds.compile(&root, None, &tools).unwrap();
+        assert!(crate::texbuild::tests::finish(&mut tex.builds));
+        let built = tex.builds.last.clone().unwrap();
+        let svc = PdfService::start();
+        let id = svc.new_doc_id();
+        svc.send(Request::Open { id, path: built.pdf.clone().unwrap(), password: None });
+        let info = loop {
+            if let Some(Response::Opened { info, .. }) = svc.recv_blocking() {
+                break info;
+            }
+        };
+        let mut tab = crate::tab::Tab::new(id, *info, quark_core::layout::PageMode::Continuous, quark_core::layout::ZoomMode::FitWidth);
+        let mut textures = crate::textures::TextureCache::new(256);
+        let prefs = quark_core::prefs::Prefs::default();
+        let ready = quark_lab::tex::TexState::Ready {
+            tinytex: "v2026.10".into(),
+            texlab: "v5.26.0".into(),
+            bundle: quark_lab::tex::Bundle::Full,
+            size: 241 << 20,
+            home: "/Users/you/.quark/tex".into(),
+        };
+        for (view, name) in [(crate::tex::DockView::Pdf, "latex-pdf.png"), (crate::tex::DockView::Log, "latex-log.png")] {
+            let ctx = egui::Context::default();
+            theme::install_fonts(&ctx);
+            theme::apply(&ctx, ThemeMode::Dark);
+            let p = Palette::for_mode(ThemeMode::Dark);
+            tex.view = view;
+            textures.clear();
+            let mut dock = crate::texdock::Dock::default();
+            shoot(&ctx, egui::vec2(1320.0, 780.0), 14, &dir.join(name), |ui| {
+                // What the service rendered, kept as the viewer will ask.
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                for r in svc.poll() {
+                    if let Response::Rendered { page, raster, .. } = r {
+                        let key = crate::textures::PageKey::new(page, tab.raster_scale(), tab.rotation, prefs.tint).of(id);
+                        textures.insert(ui.ctx(), key, &raster);
+                    }
+                }
+                let pdf = crate::tex::PdfView { tab: Some(&mut tab), service: &svc, textures: &mut textures, prefs: &prefs };
+                egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
+                    tex.show(ui, &p, Some(&ready), &mut dock, Some(pdf));
+                });
+            })
+            .unwrap();
+        }
+        drop(tex);
+        let _ = std::fs::remove_dir_all(root.parent().unwrap());
     }
 }

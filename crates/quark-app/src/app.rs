@@ -74,6 +74,11 @@ pub struct App {
     /// first opened, and made only with the person's say-so.
     pub(crate) tex_env: Option<quark_lab::tex::TexEnv>,
     pub(crate) tex_dock: crate::texdock::Dock,
+    /// The LaTeX project's PDF, shown in its dock by the viewer: a document
+    /// of its own, apart from the tabs, and the one being opened in its
+    /// place when a build makes another.
+    pub(crate) tex_pdf: Option<Tab>,
+    pub(crate) tex_pdf_opening: Option<(quark_pdf::service::DocId, u64)>,
     /// Pages being read with OCR, behind the window.
     pub(crate) ocr: Option<crate::ocr::OcrRun>,
     /// A document as it was when OCR was asked for, while its pages and
@@ -156,6 +161,8 @@ impl App {
             tex_visible: false,
             tex_env: None,
             tex_dock: crate::texdock::Dock::default(),
+            tex_pdf: None,
+            tex_pdf_opening: None,
             last_side_panel: SidePanel::Thumbnails,
             palette_index: 0,
             palette_was_open: false,
@@ -240,6 +247,17 @@ impl App {
         }
     }
 
+    /// The LaTeX project's PDF, version `version`, opened in the dock in
+    /// place of the one there.
+    pub(crate) fn show_tex_pdf(&mut self, path: &Path, version: u64) {
+        if self.tex_pdf.as_ref().is_some_and(|t| t.pdf_version == version) || self.tex_pdf_opening.is_some_and(|(_, v)| v == version) {
+            return;
+        }
+        let id = self.service.new_doc_id();
+        self.service.send(Request::Open { id, path: path.to_path_buf(), password: None });
+        self.tex_pdf_opening = Some((id, version));
+    }
+
     /// What the TeX dock asked for.
     pub(crate) fn env_action(&mut self, action: crate::texdock::EnvAction) {
         use crate::texdock::EnvAction;
@@ -275,6 +293,47 @@ impl App {
         if let Some(tex) = self.tex.as_mut() {
             if tex.poll() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        }
+        self.tend_builds(ctx);
+    }
+
+    /// A typesetting asked for, begun once TeX is there; one under way,
+    /// watched; one ended, its PDF shown.
+    fn tend_builds(&mut self, ctx: &Context) {
+        let Some(tex) = self.tex.as_mut() else { return };
+        if std::mem::take(&mut tex.wants_build) {
+            let env = self.tex_env.as_mut();
+            match env.and_then(|e| e.marker().map(|m| (m, e.home().to_path_buf(), e.person().to_path_buf(), e.sandbox()))) {
+                Some((marker, tex_home, person, sandbox)) => {
+                    let tools = crate::texbuild::Tools { marker, tex_home, person, sandbox };
+                    let active = tex.session.editor().buffer().path().map(Path::to_path_buf);
+                    let root = tex.root.clone();
+                    if let Err(why) = tex.builds.compile(&root, active.as_deref(), &tools) {
+                        self.toast(format!("TeX could not be started: {why}"), true);
+                        return;
+                    }
+                }
+                None => {
+                    tex.view = crate::tex::DockView::Tex;
+                    self.toast("Install TeX to typeset: it is in the panel on the right.", false);
+                    return;
+                }
+            }
+        }
+        if tex.builds.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        if tex.builds.poll() {
+            let last = tex.builds.last.clone();
+            // A build with errors and no PDF opens its log, where they are.
+            if let Some(last) = &last {
+                if last.state == crate::texbuild::Ended::Failed {
+                    tex.view = crate::tex::DockView::Log;
+                }
+            }
+            if let Some((pdf, version)) = last.and_then(|l| l.pdf.map(|p| (p, l.version))) {
+                self.show_tex_pdf(&pdf, version);
             }
         }
     }
@@ -410,6 +469,11 @@ impl App {
             return;
         }
         self.tex = None;
+        // Its PDF goes with it, and any build under way stops as it is dropped.
+        if let Some(pdf) = self.tex_pdf.take() {
+            self.service.send(Request::Close { id: pdf.id });
+        }
+        self.tex_pdf_opening = None;
         if self.tex_visible {
             self.tex_visible = false;
             if self.tabs.is_empty() {
@@ -662,6 +726,21 @@ impl App {
     pub(crate) fn drain_service(&mut self, ctx: &Context) {
         for response in self.service.poll() {
             match response {
+                // The LaTeX PDF, made again: opened where the last was being
+                // read, in its place, and never a tab or a recent file.
+                Response::Opened { id, info } if self.tex_pdf_opening.is_some_and(|(o, _)| o == id) => {
+                    let version = self.tex_pdf_opening.take().map_or(0, |(_, v)| v);
+                    let mut tab = Tab::new(id, *info, quark_core::layout::PageMode::Continuous, quark_core::layout::ZoomMode::FitWidth);
+                    tab.pdf_version = version;
+                    if let Some(old) = self.tex_pdf.take() {
+                        tab.zoom = old.zoom;
+                        tab.current_page = old.current_page.min(tab.page_count().saturating_sub(1));
+                        tab.scroll = old.scroll;
+                        self.service.send(Request::Close { id: old.id });
+                    }
+                    self.service.send(Request::ReadLinks { id });
+                    self.tex_pdf = Some(tab);
+                }
                 Response::Opened { id, info } => {
                     let mut tab = Tab::new(id, *info, self.prefs.page_mode, self.prefs.zoom);
                     if let Some(path) = tab.path().cloned() {
@@ -718,7 +797,7 @@ impl App {
                 } => {
                     // A raster for a view the user has already left is thrown
                     // away rather than uploaded; that is what the token is for.
-                    let Some(tab) = self.tabs.iter().find(|t| t.id == id) else {
+                    let Some(tab) = self.tabs.iter().chain(self.tex_pdf.iter()).find(|t| t.id == id) else {
                         continue;
                     };
                     if token != tab.render_token {
@@ -729,13 +808,13 @@ impl App {
                         tab.raster_scale(),
                         tab.rotation,
                         self.prefs.tint,
-                    );
+                    ).of(id);
                     self.textures.insert(ctx, key, &raster);
                 }
 
                 Response::OcrPrep { id, bytes, blank, layout } => {
                     let Some(tesseract) = quark_lab::ocr::Tesseract::find() else { continue };
-                    let Some(tab) = self.tabs.iter().find(|t| t.id == id) else { continue };
+                    let Some(tab) = self.tabs.iter().chain(self.tex_pdf.iter()).find(|t| t.id == id) else { continue };
                     let chosen = if tab.selected_pages.is_empty() {
                         vec![tab.current_page]
                     } else {
@@ -762,17 +841,17 @@ impl App {
                 Response::Thumbnail {
                     id, page, raster, ..
                 } => {
-                    let Some(tab) = self.tabs.iter().find(|t| t.id == id) else {
+                    let Some(tab) = self.tabs.iter().chain(self.tex_pdf.iter()).find(|t| t.id == id) else {
                         continue;
                     };
                     let size = tab.info.page_size(page);
                     let scale = crate::panels::thumb_edge(ctx) as f32 / size.width.max(size.height).max(1.0);
-                    let key = crate::textures::PageKey::new(page, scale, Rot::D0, self.prefs.tint);
+                    let key = crate::textures::PageKey::new(page, scale, Rot::D0, self.prefs.tint).of(id);
                     self.textures.insert(ctx, key, &raster);
                 }
 
                 Response::PageText { id, page, text } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.page_text.insert(page, *text);
                         tab.text_pending.retain(|&p| p != page);
                     }
@@ -788,7 +867,7 @@ impl App {
                     if token != self.search_token {
                         continue;
                     }
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.search.total_pages = total;
                         tab.search.scanned_pages = page + 1;
                         tab.search.hits.extend(hits);
@@ -800,41 +879,41 @@ impl App {
                         continue;
                     }
                     let mut jump = None;
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.search.running = false;
                         let current = tab.current_page;
                         tab.search.select_nearest(current);
                         jump = tab.search.current_hit().cloned();
                     }
-                    if let (Some(hit), Some(tab)) = (jump, self.tabs.iter_mut().find(|t| t.id == id))
+                    if let (Some(hit), Some(tab)) = (jump, self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id))
                     {
                         reveal_hit(tab, &hit);
                     }
                 }
 
                 Response::Annotations { id, annotations } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         // Keep identifiers ahead of anything read from the file.
                         tab.annotations = annotations;
                     }
                 }
                 Response::Outline { id, bookmarks } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.outline = bookmarks;
                     }
                 }
                 Response::Fields { id, fields } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.fields = fields;
                     }
                 }
                 Response::Attachments { id, attachments } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.attachments = attachments;
                     }
                 }
                 Response::Links { id, links } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.links = links;
                     }
                 }
@@ -846,7 +925,7 @@ impl App {
                     redaction,
                     sanitize,
                 } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.info = *info;
                         tab.invalidate_layout();
                         tab.ensure_layout();
@@ -862,7 +941,7 @@ impl App {
                     self.service.send(Request::ReadAnnotations { id });
                     self.service.send(Request::ReadOutline { id });
                     self.service.send(Request::ReadFields { id });
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.page_text.clear();
                         tab.text_pending.clear();
                     }
@@ -886,7 +965,7 @@ impl App {
                 }
 
                 Response::Saved { id, path } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    if let Some(tab) = self.tabs.iter_mut().chain(self.tex_pdf.iter_mut()).find(|t| t.id == id) {
                         tab.info.dirty = false;
                         tab.info.path = Some(path.clone());
                     }

@@ -2947,7 +2947,13 @@ impl eframe::App for App {
                     work_area = Some(ui.max_rect());
                     if let Some(tex) = &mut self.tex {
                         let state = self.tex_env.as_ref().map(|e| e.state());
-                        env_asked = tex.show(ui, &p, state, &mut self.tex_dock);
+                        let pdf = crate::tex::PdfView {
+                            tab: self.tex_pdf.as_mut(),
+                            service: &self.service,
+                            textures: &mut self.textures,
+                            prefs: &self.prefs,
+                        };
+                        env_asked = tex.show(ui, &p, state, &mut self.tex_dock, Some(pdf));
                     }
                     return ViewerAction::None;
                 }
@@ -3031,8 +3037,14 @@ impl eframe::App for App {
         if let Some(root) = tex_open {
             self.open_tex(&root);
         }
-        if let Some(a) = env_asked {
-            self.env_action(a);
+        match env_asked {
+            Some(crate::tex::TexAsk::Env(a)) => self.env_action(a),
+            Some(crate::tex::TexAsk::Typeset) => {
+                if let Some(tex) = &mut self.tex {
+                    tex.wants_build = true;
+                }
+            }
+            None => {}
         }
         self.tend_tex(ctx);
         self.tend_library(ctx);

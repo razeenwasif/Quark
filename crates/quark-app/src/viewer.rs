@@ -121,7 +121,7 @@ pub fn show(
 
         paint_page_chrome(&painter, p, screen);
 
-        let key = PageKey::new(*index, tab.raster_scale(), tab.rotation, prefs.tint);
+        let key = PageKey::new(*index, tab.raster_scale(), tab.rotation, prefs.tint).of(tab.id);
         match textures.get_nearest(*index, &key) {
             Some(tex) => {
                 painter.add(
@@ -160,6 +160,7 @@ pub fn show(
         paint_search_hits(&painter, p, tab, *index, &t, origin);
         paint_selection(&painter, p, tab, *index, &t, origin);
         paint_annotations(&painter, p, tab, *index, &t, origin);
+        paint_flash(ui, &painter, p, tab, *index, &t, origin);
         if prefs.side_panel == quark_core::prefs::SidePanel::Fields {
             paint_field_outlines(&painter, p, tab, *index, &t, origin);
         }
@@ -306,6 +307,37 @@ fn paint_page_chrome(painter: &Painter, p: &Palette, screen: ERect) {
     }
 }
 
+/// How long a place SyncTeX found stays lit.
+const FLASH: f64 = 1.6;
+
+/// A place lit for a moment, fading.
+fn paint_flash(ui: &Ui, painter: &Painter, p: &Palette, tab: &mut Tab, page: usize, t: &PageTransform, origin: Pos2) {
+    let Some((on, rect, since)) = &mut tab.flash else { return };
+    if *on != page {
+        return;
+    }
+    let now = ui.input(|i| i.time);
+    let since = *since.get_or_insert(now);
+    let left = 1.0 - (now - since) / FLASH;
+    if left <= 0.0 {
+        tab.flash = None;
+        return;
+    }
+    let c = t.page_rect_to_content(*rect);
+    let r = ERect::from_min_max(content_to_screen(origin, c.min), content_to_screen(origin, c.max)).expand(3.0);
+    painter.rect_filled(r, CornerRadius::same(3), p.accent_alpha((90.0 * left) as u8));
+    ui.ctx().request_repaint();
+}
+
+/// The page under a point of the screen, and where on it, in page space:
+/// for SyncTeX, which asks what was typeset there.
+pub(crate) fn page_point(tab: &Tab, canvas: ERect, pointer: Pos2) -> Option<(usize, Vec2, quark_core::geom::PageSize)> {
+    let content = Vec2::new(pointer.x - canvas.min.x + tab.scroll.x, pointer.y - canvas.min.y + tab.scroll.y);
+    let pb = tab.layout.page_at(content)?;
+    let t = PageTransform::new(pb.rect, pb.size, tab.rotation);
+    Some((pb.index, t.content_to_page(content), pb.size))
+}
+
 /// Asks the worker for any page raster the next few frames will need.
 fn request_visible(
     tab: &mut Tab,
@@ -323,7 +355,7 @@ fn request_visible(
         .collect();
 
     for page in pages {
-        let key = PageKey::new(page, tab.raster_scale(), tab.rotation, prefs.tint);
+        let key = PageKey::new(page, tab.raster_scale(), tab.rotation, prefs.tint).of(tab.id);
         if textures.mark_pending(key, tab.render_token) {
             service.send(Request::Render {
                 id: tab.id,

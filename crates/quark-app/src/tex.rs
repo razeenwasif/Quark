@@ -166,6 +166,47 @@ pub(crate) struct TexProject {
     cursor_at: Option<Rect>,
     /// Quark's own texlab, once it has been given it.
     pub own_texlab: Option<PathBuf>,
+    /// Its builds, and what the last came to.
+    pub builds: crate::texbuild::Builder,
+    /// A typesetting asked for — by a save, ⌘B or the dock — not yet begun.
+    pub wants_build: bool,
+    /// ⌘↩: the line being edited, shown in the PDF.
+    forward: bool,
+    /// Which of the dock's views shows.
+    pub view: DockView,
+    /// The document's headings and words, as last read, and of which file.
+    outline: (Option<PathBuf>, quark_tex::outline::Outline),
+}
+
+/// The dock's views, once TeX is installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DockView {
+    #[default]
+    Pdf,
+    Log,
+    Tex,
+}
+
+/// What the dock asks of the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TexAsk {
+    Env(crate::texdock::EnvAction),
+    Typeset,
+}
+
+/// The PDF and what draws it, lent to the dock for a frame.
+pub(crate) struct PdfView<'a> {
+    pub tab: Option<&'a mut crate::tab::Tab>,
+    pub service: &'a quark_pdf::service::PdfService,
+    pub textures: &'a mut crate::textures::TextureCache,
+    pub prefs: &'a quark_core::prefs::Prefs,
+}
+
+/// A SyncTeX box, top-left points as SyncTeX has it, as page space — PDF
+/// points from the bottom left — on a page `height` points tall.
+pub(crate) fn synctex_rect(r: &quark_tex::synctex::Rect, height: f32) -> quark_core::geom::Rect {
+    use quark_core::geom::{Rect as R, Vec2 as V};
+    R::new(V::new(r.x, height - r.y - r.h), V::new(r.x + r.w, height - r.y))
 }
 
 /// What a key does while the completion list is showing: moves in it,
@@ -230,9 +271,34 @@ impl TexProject {
             told: None,
             cursor_at: None,
             own_texlab: None,
+            builds: Default::default(),
+            wants_build: false,
+            forward: false,
+            view: DockView::Pdf,
+            outline: (None, Default::default()),
         };
+        project.read_outline();
         project.sync();
         project
+    }
+
+    /// The headings, read again from the files as saved.
+    fn read_outline(&mut self) {
+        let active = self.session.editor().buffer().path().map(Path::to_path_buf);
+        self.outline = crate::texbuild::outline_of(&self.root, active.as_deref());
+    }
+
+    /// Open `file` — a path in the project, or whole — at `line`, one-based.
+    pub(crate) fn open_at(&mut self, file: &str, line: u32) {
+        let path = if Path::new(file).is_absolute() { PathBuf::from(file) } else { self.root.join(file) };
+        if let Err(e) = self.session.open(&path) {
+            self.said = Some((format!("{file}: {e}"), true));
+            return;
+        }
+        let view = self.session.splits().focused();
+        self.session.click(view, line.saturating_sub(1) as usize, 0);
+        self.popup.close();
+        self.sync();
     }
 
     /// texlab is Quark's own now: started from there.
@@ -356,6 +422,12 @@ impl TexProject {
         for event in &events {
             match event {
                 egui::Event::Paste(text) => self.session.paste(text),
+                egui::Event::Key { key: egui::Key::B, pressed: true, modifiers, .. } if modifiers.mac_cmd || modifiers.command => {
+                    self.wants_build = true;
+                }
+                egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.mac_cmd || modifiers.command => {
+                    self.forward = true;
+                }
                 // ⌘C and ⌘X with a selection: yanked and deleted, so the
                 // clipboard gets it as `y` and `d` give it.
                 egui::Event::Copy if self.session.vim().is_selecting() => said.extend(self.session.key(&Key::char('y'))),
@@ -381,6 +453,10 @@ impl TexProject {
                 Said::Warn(text) => Some((text, true)),
                 Said::Wrote(path) => {
                     self.servers.saved(self.session.editor().buffer());
+                    if crate::texbuild::is_source(&path) {
+                        self.wants_build = true;
+                        self.read_outline();
+                    }
                     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
                     // A file made by `:w` or `:e` belongs in the list.
                     if !self.files.iter().any(|f| f.path == path) {
@@ -402,11 +478,15 @@ impl TexProject {
         p: &Palette,
         env: Option<&quark_lab::tex::TexState>,
         dock: &mut crate::texdock::Dock,
-    ) -> Option<crate::texdock::EnvAction> {
+        pdf: Option<PdfView>,
+    ) -> Option<TexAsk> {
         let full = ui.available_rect_before_wrap();
         ui.allocate_rect(full, Sense::hover());
         let files = Rect::from_min_size(full.min, vec2(FILES_W, full.height()));
-        let side = Rect::from_min_max(pos2(full.right() - DOCK_W, full.top()), full.max);
+        // Wide enough to read a page in, once there is TeX to make one.
+        let ready = matches!(env, Some(quark_lab::tex::TexState::Ready { .. }));
+        let dock_w = if ready { (full.width() * 0.4).clamp(DOCK_W, 760.0) } else { DOCK_W };
+        let side = Rect::from_min_max(pos2(full.right() - dock_w, full.top()), full.max);
         let editor = Rect::from_min_max(pos2(files.right() + theme::GAP, full.top()), pos2(side.left() - theme::GAP, full.bottom()));
         let painter = ui.ctx().layer_painter(ui.layer_id());
         theme::paint_island(&painter, files, p);
@@ -414,14 +494,28 @@ impl TexProject {
         theme::paint_island(&painter, side, p);
         let mut asked = None;
         if let Some(state) = env {
-            let mut side_ui = ui.new_child(egui::UiBuilder::new().max_rect(side.shrink2(vec2(16.0, 14.0))));
-            egui::ScrollArea::vertical().id_salt("tex-dock").auto_shrink([false, false]).show(&mut side_ui, |ui| {
-                asked = crate::texdock::show(ui, p, state, dock);
-            });
+            let ready = matches!(state, quark_lab::tex::TexState::Ready { .. });
+            let mut side_ui = ui.new_child(egui::UiBuilder::new().max_rect(side.shrink2(vec2(14.0, 12.0))));
+            if ready {
+                asked = self.dock(&mut side_ui, p, state, dock, pdf);
+            } else {
+                egui::ScrollArea::vertical().id_salt("tex-dock").auto_shrink([false, false]).show(&mut side_ui, |ui| {
+                    asked = crate::texdock::show(ui, p, state, dock).map(TexAsk::Env);
+                });
+            }
         }
 
-        let mut files_ui = ui.new_child(egui::UiBuilder::new().max_rect(files.shrink2(vec2(10.0, 12.0))));
+        // The files above, the outline below when there is one.
+        let inner_files = files.shrink2(vec2(10.0, 12.0));
+        let outline_h = if self.outline.1.headings.is_empty() { 0.0 } else { (inner_files.height() * 0.45).min(360.0) };
+        let list = Rect::from_min_max(inner_files.min, pos2(inner_files.right(), inner_files.bottom() - outline_h));
+        let mut files_ui = ui.new_child(egui::UiBuilder::new().max_rect(list));
         self.file_list(&mut files_ui, p);
+        if outline_h > 0.0 {
+            let area = Rect::from_min_max(pos2(inner_files.left(), list.bottom() + 6.0), inner_files.max);
+            let mut outline_ui = ui.new_child(egui::UiBuilder::new().max_rect(area));
+            self.outline_list(&mut outline_ui, p);
+        }
 
         let inner = editor.shrink(1.0);
         let status = Rect::from_min_max(pos2(inner.left(), inner.bottom() - STATUS_H), inner.max);
@@ -482,6 +576,231 @@ impl TexProject {
             }
             self.popup.close();
             self.sync();
+        }
+    }
+
+    /// The document's headings, each a click from its line, and its words.
+    fn outline_list(&mut self, ui: &mut Ui, p: &Palette) {
+        ui.painter().hline(ui.max_rect().x_range(), ui.max_rect().top() - 3.0, egui::Stroke::new(1.0, p.wash(0x10)));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Outline").font(theme::strong(12.5)).color(p.text_muted));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(format!("{} words", self.outline.1.words)).font(theme::body(11.0)).color(p.text_faint));
+            });
+        });
+        let mut go = None;
+        egui::ScrollArea::vertical().id_salt("tex-outline").auto_shrink([false, false]).show(ui, |ui| {
+            for h in &self.outline.1.headings {
+                let indent = (h.level.saturating_sub(1)) as f32 * 10.0;
+                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 21.0), Sense::click());
+                if response.hovered() {
+                    ui.painter().rect_filled(rect, CornerRadius::same(5), p.wash(0x08));
+                }
+                let title = quark_ui::widgets::elide(&h.title, 34, false);
+                let font = if h.level <= 2 { theme::strong(12.0) } else { theme::body(12.0) };
+                ui.painter().text(pos2(rect.left() + 8.0 + indent, rect.center().y), egui::Align2::LEFT_CENTER, title, font, p.text);
+                if response.on_hover_text(format!("{}:{}", h.file, h.line)).clicked() {
+                    go = Some((h.file.clone(), h.line));
+                }
+            }
+        });
+        if let Some((file, line)) = go {
+            self.open_at(&file, line);
+        }
+    }
+
+    /// The dock once TeX is installed: the PDF, the build's log, and TeX.
+    fn dock(
+        &mut self,
+        ui: &mut Ui,
+        p: &Palette,
+        state: &quark_lab::tex::TexState,
+        dock: &mut crate::texdock::Dock,
+        pdf: Option<PdfView>,
+    ) -> Option<TexAsk> {
+        use crate::texbuild::Ended;
+        use quark_ui::widgets::Segment;
+        let mut asked = None;
+        let issues = self.builds.log.as_ref().map_or(0, |l| l.entries.len());
+        ui.horizontal(|ui| {
+            let views = [Segment::Text("PDF"), Segment::Counted("Log", issues), Segment::Text("TeX")];
+            let at = match self.view {
+                DockView::Pdf => 0,
+                DockView::Log => 1,
+                DockView::Tex => 2,
+            };
+            if let Some(i) = quark_ui::widgets::segmented(ui, p, &views, at, false, 26.0) {
+                self.view = [DockView::Pdf, DockView::Log, DockView::Tex][i];
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.builds.running() {
+                    if quark_ui::widgets::ghost_button(ui, p, "Stop").clicked() {
+                        self.builds.stop();
+                    }
+                    ui.add(egui::Spinner::new().size(14.0));
+                } else if quark_ui::widgets::primary_button(ui, p, "Typeset", true).on_hover_text("⌘B — and every save of a .tex").clicked() {
+                    asked = Some(TexAsk::Typeset);
+                }
+            });
+        });
+        // How the last build came out, in a line.
+        if let Some(last) = &self.builds.last {
+            let line = match last.state {
+                Ended::Running => format!("Typesetting {} with {}… {:.0} s", last.main.as_deref().unwrap_or(""), last.engine, last.seconds),
+                Ended::NoMain => "No file begins a document with \\documentclass.".into(),
+                Ended::Stopped => "Stopped.".into(),
+                Ended::TimedOut => "It took too long, and was stopped.".into(),
+                Ended::Failed => format!("No PDF was made{}", last.said.as_deref().map(|s| format!(": {s}")).unwrap_or_else(|| ". The log says why.".into())),
+                Ended::Done => {
+                    let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
+                    let pages = last.pages.map(|p| format!(" · {}", n(p as usize, "page", "pages"))).unwrap_or_default();
+                    format!(
+                        "{} · {} · {} in {:.1} s{pages}",
+                        n(last.errors, "error", "errors"),
+                        n(last.warnings, "warning", "warnings"),
+                        last.engine,
+                        last.seconds
+                    )
+                }
+            };
+            let warn = matches!(last.state, Ended::Failed | Ended::NoMain | Ended::TimedOut) || last.errors > 0;
+            ui.label(RichText::new(line).font(theme::body(11.5)).color(if warn { p.warning } else { p.text_faint }));
+        }
+        ui.add_space(6.0);
+        match self.view {
+            DockView::Pdf => self.pdf_view(ui, p, pdf),
+            DockView::Log => self.log_view(ui, p),
+            DockView::Tex => {
+                egui::ScrollArea::vertical().id_salt("tex-env").auto_shrink([false, false]).show(ui, |ui| {
+                    if let Some(a) = crate::texdock::show(ui, p, state, dock) {
+                        asked = Some(TexAsk::Env(a));
+                    }
+                });
+            }
+        }
+        asked
+    }
+
+    /// The PDF last made, in Quark's viewer: double-click a place to go to
+    /// the line that put it there.
+    fn pdf_view(&mut self, ui: &mut Ui, p: &Palette, pdf: Option<PdfView>) {
+        let Some(PdfView { tab: Some(tab), service, textures, prefs }) = pdf else {
+            let words = if self.builds.running() {
+                "Typesetting…"
+            } else {
+                "Typeset to see the PDF: ⌘B, or save a .tex file."
+            };
+            ui.add_space(20.0);
+            ui.vertical_centered(|ui| ui.label(RichText::new(words).font(theme::body(12.5)).color(p.text_faint)));
+            return;
+        };
+        // SyncTeX forward: ⌘↩ in the editor.
+        if std::mem::take(&mut self.forward) {
+            let buffer = self.session.editor().buffer();
+            if let Some(path) = buffer.path().map(Path::to_path_buf) {
+                let line = buffer.position(buffer.cursor.offset).line as u32 + 1;
+                match self.builds.forward(&self.root, &path, line) {
+                    Ok(found) => {
+                        let page = (found.page as usize).saturating_sub(1);
+                        let height = tab.info.page_size(page).height;
+                        if let Some(first) = found.rects.first() {
+                            let rect = synctex_rect(first, height);
+                            tab.reveal(page, rect);
+                            tab.flash = Some((page, rect, None));
+                        } else {
+                            tab.go_to_page(page);
+                        }
+                    }
+                    Err(why) => self.said = Some((why, false)),
+                }
+            }
+        }
+        let canvas = ui.available_rect_before_wrap();
+        // SyncTeX back: a double-click is where something was typeset from.
+        let double = ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+        let at = ui.input(|i| i.pointer.interact_pos()).filter(|at| canvas.contains(*at));
+        let mut back = None;
+        if let (true, Some(at)) = (double, at) {
+            if let Some((page, point, size)) = crate::viewer::page_point(tab, canvas, at) {
+                back = self.builds.inverse(page as u32 + 1, point.x as f64, (size.height - point.y) as f64);
+            }
+        }
+        egui::Frame::new().corner_radius(CornerRadius::same(8)).show(ui, |ui| {
+            let action = crate::viewer::show(ui, p, tab, service, textures, prefs, quark_core::tools::Tool::Select);
+            if let crate::viewer::ViewerAction::GoToPage(page) = action {
+                tab.go_to_page(page);
+            }
+        });
+        if let Some((file, line)) = back {
+            tab.selection = None;
+            self.open_at(&file, line);
+        }
+    }
+
+    /// What the build said: errors first, each a click from its line; then
+    /// warnings and bad boxes; and the packages it lacked.
+    fn log_view(&mut self, ui: &mut Ui, p: &Palette) {
+        use quark_tex::log::Kind;
+        let Some(log) = self.builds.log.clone() else {
+            ui.label(RichText::new("Nothing typeset yet.").font(theme::body(12.5)).color(p.text_faint));
+            return;
+        };
+        let mut go = None;
+        egui::ScrollArea::vertical().id_salt("tex-log").auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_max_width(ui.available_width());
+            if !log.missing.is_empty() {
+                ui.label(
+                    RichText::new(format!("TeX lacks {}: a package would bring them.", log.missing.join(", ")))
+                        .font(theme::body(12.0))
+                        .color(p.warning),
+                );
+                ui.add_space(6.0);
+            }
+            if log.entries.is_empty() {
+                ui.label(RichText::new("No errors or warnings.").font(theme::body(12.5)).color(p.text_faint));
+            }
+            for kind in [Kind::Error, Kind::Warning, Kind::Box] {
+                for e in log.entries.iter().filter(|e| e.kind == kind) {
+                    let colour = match kind {
+                        Kind::Error => code::severity_colour(quark_lsp::servers::Severity::Error, p),
+                        Kind::Warning => code::severity_colour(quark_lsp::servers::Severity::Warning, p),
+                        Kind::Box => p.text_faint,
+                    };
+                    let place = match (&e.file, e.line) {
+                        (Some(f), Some(l)) => format!("{f}:{l}"),
+                        (Some(f), None) => f.clone(),
+                        _ => String::new(),
+                    };
+                    let response = egui::Frame::new()
+                        .fill(p.wash(0x06))
+                        .corner_radius(CornerRadius::same(8))
+                        .inner_margin(egui::Margin::symmetric(10, 7))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                                ui.painter().circle_filled(dot.center(), 3.5, colour);
+                                ui.label(RichText::new(&place).font(code::font()).size(11.5).color(p.text_muted));
+                            });
+                            ui.label(RichText::new(&e.message).font(theme::body(12.5)).color(p.text));
+                            if let Some(context) = &e.context {
+                                ui.label(RichText::new(context).font(code::font()).size(11.5).color(p.text_faint));
+                            }
+                        })
+                        .response
+                        .interact(Sense::click());
+                    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if response.clicked() {
+                        if let (Some(f), Some(l)) = (&e.file, e.line) {
+                            go = Some((f.clone(), l));
+                        }
+                    }
+                    ui.add_space(4.0);
+                }
+            }
+        });
+        if let Some((file, line)) = go {
+            self.open_at(&file, line);
         }
     }
 
@@ -834,5 +1153,48 @@ while (1) {
         assert_eq!(project.session.mode(), VimMode::Insert, "and still typing");
         drop(project);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_save_of_a_source_asks_for_a_build_and_reads_the_outline_again() {
+        let root = project("save");
+        std::fs::write(root.join("main.tex"), "\\documentclass{article}\n\\begin{document}\n\\section{One}\nWords here.\n\\end{document}\n").unwrap();
+        let mut p = TexProject::open(&root);
+        assert_eq!(p.outline.1.headings.len(), 1);
+        assert!(!p.wants_build);
+        for c in "4Go\\section{Two}".chars() {
+            p.key(&Key::char(c));
+        }
+        p.key(&Key::named("Escape"));
+        for c in ":w".chars() {
+            p.key(&Key::char(c));
+        }
+        let said = p.key(&Key::named("Enter"));
+        p.tell(said);
+        assert!(p.wants_build, "a .tex written typesets the project");
+        let titles: Vec<&str> = p.outline.1.headings.iter().map(|h| h.title.as_str()).collect();
+        assert_eq!(titles, ["One", "Two"], "and its outline is read again");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_place_in_the_log_or_the_outline_opens_its_file_at_its_line() {
+        let root = project("open-at");
+        let mut p = TexProject::open(&root);
+        p.open_at("chapters/one.tex", 1);
+        assert_eq!(p.session.editor().buffer().name(), "one.tex");
+        p.open_at("paper.tex", 3);
+        let b = p.session.editor().buffer();
+        assert_eq!((b.name().as_str(), b.position(b.cursor.offset).line), ("paper.tex", 2));
+        p.open_at("gone.tex", 1);
+        assert!(p.said.as_ref().is_some_and(|(_, warn)| *warn), "a file not there is said");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_synctex_box_is_turned_the_right_way_up() {
+        let r = quark_tex::synctex::Rect { x: 72.0, y: 100.0, w: 200.0, h: 12.0 };
+        let page = synctex_rect(&r, 792.0);
+        assert_eq!((page.min.x, page.min.y, page.max.x, page.max.y), (72.0, 680.0, 272.0, 692.0));
     }
 }

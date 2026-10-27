@@ -15,6 +15,9 @@ use quark_pdf::render::Raster;
 /// matches the view is stale and must be re-rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PageKey {
+    /// The document it is a page of: two open at once — a document and a
+    /// LaTeX project's PDF — never show each other's pages.
+    pub doc: u64,
     pub page: usize,
     /// Scale, quantised to 1/64 so that a smooth zoom does not invalidate every
     /// texture on every frame. Storing the raw float would mean a new texture
@@ -27,6 +30,7 @@ pub struct PageKey {
 impl PageKey {
     pub fn new(page: usize, scale: f32, rotation: quark_core::geom::Rot, tint: quark_core::prefs::PageTint) -> Self {
         Self {
+            doc: 0,
             page,
             scale_q: (scale * 64.0).round().max(1.0) as u32,
             rotation: rotation.degrees() as u8 / 90,
@@ -34,6 +38,10 @@ impl PageKey {
         }
     }
 
+    /// The same page of document `doc`.
+    pub fn of(self, doc: u64) -> Self {
+        Self { doc, ..self }
+    }
 }
 
 struct Entry {
@@ -133,7 +141,7 @@ impl TextureCache {
             .entries
             .keys()
             .filter(|k| {
-                k.page == page && k.rotation == want.rotation && k.tint == want.tint
+                k.doc == want.doc && k.page == page && k.rotation == want.rotation && k.tint == want.tint
             })
             // Prefer the closest scale, breaking ties towards the larger one so
             // the stand-in is sharp rather than blurry.
@@ -212,6 +220,13 @@ mod tests {
     use super::*;
     use quark_core::geom::Rot;
     use quark_core::prefs::PageTint;
+
+    #[test]
+    fn two_documents_never_share_a_page() {
+        let a = PageKey::new(0, 1.0, Rot::D0, PageTint::None).of(1);
+        let b = PageKey::new(0, 1.0, Rot::D0, PageTint::None).of(2);
+        assert_ne!(a, b);
+    }
 
     #[test]
     fn scale_is_quantised_so_smooth_zoom_does_not_thrash_the_cache() {
