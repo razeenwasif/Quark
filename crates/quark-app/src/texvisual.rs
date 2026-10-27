@@ -152,6 +152,8 @@ pub(crate) struct Visual {
     pictures: HashMap<PathBuf, Result<(egui::TextureHandle, egui::Vec2), String>>,
     /// What went wrong last, to say.
     pub said: Option<String>,
+    /// The equations, typeset by TeX.
+    pub math: crate::texmath::MathImages,
 }
 
 impl Visual {
@@ -172,6 +174,7 @@ impl Visual {
             .filter(|b| b.kind == "preamble")
             .map(|b| quark_tex::blocks::macros(&b.text))
             .unwrap_or_default();
+        self.math.set_macros(&self.macros);
         // The block typed in goes on being typed in, as it now stands.
         self.typing = self.typing.take().filter(|_| same_file).and_then(|t| {
             let pieces = self.drawn.get(t.block)?.pieces()?.to_vec();
@@ -700,14 +703,36 @@ impl Visual {
             ui.add_space(10.0);
             return Asked::None;
         }
+        let tex = texinline::display_math(&block.text);
+        let shown = self.math.shown(ui.ctx(), &tex);
         let r = ui
             .vertical_centered(|ui| {
                 ui.add_space(4.0);
-                ui.label(
-                    RichText::new(texinline::display_math(&block.text))
-                        .font(FontId::monospace(13.0))
-                        .color(p.text_muted),
-                );
+                match shown {
+                    crate::texmath::Shown::Ready(texture, size) => {
+                        let size = if size.x > width {
+                            size * (width / size.x)
+                        } else {
+                            size
+                        };
+                        ui.add(egui::Image::new((texture.id(), size)).tint(p.text));
+                    }
+                    crate::texmath::Shown::Waiting => {
+                        ui.label(
+                            RichText::new(&tex)
+                                .font(FontId::monospace(13.0))
+                                .color(p.text_faint),
+                        );
+                    }
+                    crate::texmath::Shown::Failed(why) => {
+                        ui.label(
+                            RichText::new(&tex)
+                                .font(FontId::monospace(13.0))
+                                .color(p.text_muted),
+                        );
+                        ui.label(RichText::new(why).font(theme::body(11.5)).color(p.warning));
+                    }
+                }
                 ui.add_space(4.0);
             })
             .response

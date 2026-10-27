@@ -798,7 +798,9 @@ pub(crate) fn display_math(src: &str) -> String {
         rest = &after[1..];
     }
     out.push_str(rest);
-    out
+    // A line left blank is a paragraph, which mathematics cannot hold.
+    let kept: Vec<&str> = out.split('\n').filter(|l| !l.trim().is_empty()).collect();
+    kept.join("\n")
 }
 
 /// A list's items, and whether they are numbered.
@@ -1023,6 +1025,11 @@ mod tests {
             "\\begin{align*}\na &= b \\\\\nc &= d\n\\end{align*}"
         );
         assert_eq!(display_math("$$ y $$"), "\\[ y \\]");
+        assert_eq!(
+            display_math("\\begin{equation}\n  y = 2\n  \\label{eq:y}\n\\end{equation}"),
+            "\\[\n  y = 2\n\\]",
+            "the label's line goes with it"
+        );
         assert_eq!(display_math("\\[ z \\notag \\]"), "\\[ z  \\]");
         assert_eq!(
             display_math("\\[ \\notation \\]"),

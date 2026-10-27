@@ -576,6 +576,38 @@ mod tests {
             tex.set_visual(true, None);
             // The caret in the first paragraph, as a click puts it there.
             tex.visual.caret_at = Some(main.find("We draw").map(|b| main[..b].chars().count()).unwrap());
+            // With a TinyTeX named — its programs only; the build is in a
+            // folder of its own here — the equations typeset for real.
+            if let Some(bin) = std::env::var_os("QUARK_TINYTEX_BIN").map(PathBuf::from) {
+                let tools = crate::texbuild::Tools {
+                    marker: quark_lab::tex::Marker {
+                        tinytex: "live".into(),
+                        texlab: "live".into(),
+                        bundle: Default::default(),
+                        bin,
+                        texlab_bin: root.join("texlab"),
+                        size: 0,
+                        made: 0,
+                    },
+                    tex_home: root.join(".tex"),
+                    person: root.clone(),
+                    sandbox: quark_lab::sandbox::Kind::None,
+                };
+                // A frame drawn nowhere, so the page asks for its equations.
+                let asking = egui::Context::default();
+                theme::install_fonts(&asking);
+                let mut out = asking.run_ui(Default::default(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        tex.show(ui, &p, Some(&ready), &mut crate::texdock::Dock::default(), None);
+                    });
+                });
+                out.textures_delta.clear();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+                while tex.visual.math.busy() && std::time::Instant::now() < deadline {
+                    tex.visual.math.tend(Some(&tools));
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
             shoot(&ctx, egui::vec2(1320.0, 860.0), 6, &dir.join(name), |ui| {
                 egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
                     tex.show(ui, &p, Some(&ready), &mut crate::texdock::Dock::default(), None);

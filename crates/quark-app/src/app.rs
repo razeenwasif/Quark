@@ -302,6 +302,27 @@ impl App {
             }
         }
         self.tend_builds(ctx);
+        self.tend_math(ctx);
+    }
+
+    /// The visual editor's equations typeset, while it shows and once there
+    /// is TeX to do it.
+    fn tend_math(&mut self, ctx: &Context) {
+        let Some(tex) = self.tex.as_mut().filter(|t| t.visual.on) else { return };
+        let tools = self.tex_env.as_mut().and_then(|e| {
+            e.marker().map(|marker| crate::texbuild::Tools {
+                marker,
+                tex_home: e.home().to_path_buf(),
+                person: e.person().to_path_buf(),
+                sandbox: e.sandbox(),
+            })
+        });
+        if tex.visual.math.tend(tools.as_ref()) {
+            ctx.request_repaint();
+        }
+        if tools.is_some() && tex.visual.math.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
     }
 
     /// A typesetting asked for, begun once TeX is there; one under way,
