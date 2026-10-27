@@ -65,6 +65,10 @@ pub enum Command {
     OpenTexProject,
     /// A LaTeX project made from a template.
     NewTexProject,
+    /// A new document in the docs editor.
+    NewDocument,
+    /// A Markdown document, opened in the docs editor.
+    OpenDocument,
     /// Every page small, to choose and rearrange.
     PageGrid,
     ToggleTheme,
@@ -238,6 +242,8 @@ pub fn command_table() -> Vec<CommandInfo> {
         C::Open, "Open…", File, "Ctrl+O", false;
         C::Save, "Save", File, "Ctrl+S", true;
         C::SaveAs, "Save As…", File, "Ctrl+Shift+S", true;
+        C::NewDocument, "New Document", File, "Ctrl+N", false;
+        C::OpenDocument, "Open Document…", File, "", false;
         C::OpenTexProject, "Open LaTeX Project…", File, "", false;
         C::NewTexProject, "New LaTeX Project…", File, "", false;
         C::SaveACopy, "Save a Copy…", File, "", false;

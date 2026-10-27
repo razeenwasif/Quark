@@ -906,6 +906,19 @@ impl Editor {
         Some(id)
     }
 
+    /// A comment's thread changed — a reply, resolved, reopened: the file
+    /// needs saving, though the text has not changed and there is nothing to
+    /// undo.
+    pub fn touch_comments(&mut self) {
+        self.changed();
+    }
+
+    /// Deletes a comment, its thread and its marking.
+    pub fn remove_comment(&mut self, id: u32) {
+        self.doc.remove_comment(id);
+        self.changed();
+    }
+
     // --- suggestions ---
 
     /// Claude proposes replacing a range with Markdown. Nothing changes until

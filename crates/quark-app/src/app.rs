@@ -79,6 +79,10 @@ pub struct App {
     /// place when a build makes another.
     pub(crate) tex_pdf: Option<Tab>,
     pub(crate) tex_pdf_opening: Option<(quark_pdf::service::DocId, u64)>,
+    /// The documents open in the docs editor, and which one shows.
+    pub(crate) docs: crate::docs::Docs,
+    /// Claude, as the docs editor asks it.
+    pub(crate) docs_claude: crate::docs::claude::DocsClaude,
     /// Pages being read with OCR, behind the window.
     pub(crate) ocr: Option<crate::ocr::OcrRun>,
     /// A document as it was when OCR was asked for, while its pages and
@@ -163,6 +167,8 @@ impl App {
             tex_dock: crate::texdock::Dock::default(),
             tex_pdf: None,
             tex_pdf_opening: None,
+            docs: crate::docs::Docs::default(),
+            docs_claude: crate::docs::claude::DocsClaude::default(),
             last_side_panel: SidePanel::Thumbnails,
             palette_index: 0,
             palette_was_open: false,
@@ -417,7 +423,7 @@ impl App {
     /// returns to the document the user was last reading.
     /// Whether a document is the surface showing: not home, not LaTeX.
     pub(crate) fn on_document(&self) -> bool {
-        !self.home.visible && !self.tex_visible
+        !self.home.visible && !self.tex_visible && self.docs.shown.is_none()
     }
 
     /// The LaTeX project, if one is open.
@@ -425,6 +431,7 @@ impl App {
         if self.tex.is_some() {
             self.home.visible = false;
             self.tex_visible = true;
+            self.docs.shown = None;
         }
     }
 
@@ -502,6 +509,8 @@ impl App {
     pub(crate) fn show_home(&mut self) {
         self.home.visible = true;
         self.tex_visible = false;
+        self.docs.shown = None;
+        self.home.docs.rescan();
         // Where the books just read were left.
         self.sync_books();
     }
@@ -530,6 +539,7 @@ impl App {
         if index < self.tabs.len() {
             self.home.visible = false;
             self.tex_visible = false;
+            self.docs.shown = None;
             self.active = index;
         }
     }
@@ -549,6 +559,11 @@ impl App {
     // --- opening and closing ---
 
     pub(crate) fn open_path(&mut self, path: &Path, password: Option<String>) {
+        // Markdown and text are documents to write in, not PDFs.
+        if crate::docs::is_document(path) {
+            self.open_document(path);
+            return;
+        }
         // Re-opening a document already on screen just switches to its tab,
         // rather than showing the same file twice.
         if let Some(i) = self
@@ -569,8 +584,10 @@ impl App {
 
     pub(crate) fn open_dialog(&mut self) {
         if let Some(files) = rfd::FileDialog::new()
+            .add_filter("PDFs and documents", &["pdf", "md", "markdown", "mdown", "txt"])
             .add_filter("PDF documents", &["pdf"])
-            .set_title("Open PDF")
+            .add_filter("Documents", &crate::docs::EXTENSIONS)
+            .set_title("Open")
             .pick_files()
         {
             for f in files {

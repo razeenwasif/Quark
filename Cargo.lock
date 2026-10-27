@@ -3172,6 +3172,7 @@ dependencies = [
  "image",
  "quark-ai",
  "quark-core",
+ "quark-doc",
  "quark-lab",
  "quark-literature",
  "quark-lsp",

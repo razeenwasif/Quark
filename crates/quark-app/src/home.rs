@@ -54,6 +54,8 @@ pub(crate) enum Section {
     Recent,
     /// LaTeX projects.
     Latex,
+    /// Documents written in Quark.
+    Documents,
     Tools,
 }
 
@@ -65,6 +67,8 @@ pub(crate) enum Action {
     Books(crate::books::BooksAction),
     /// A LaTeX project opened again.
     OpenTex(PathBuf),
+    /// Something from the Documents section.
+    Docs(crate::docs::home::DocsAction),
 }
 
 /// One row of the recent list, with its filesystem facts already resolved.
@@ -85,6 +89,8 @@ pub(crate) struct HomeState {
     pub(crate) section: Section,
     /// The library, as last walked.
     pub(crate) books: crate::books::BooksState,
+    /// The Documents section: the files listed, and a draft being asked for.
+    pub(crate) docs: crate::docs::home::DocsHome,
     entries: Vec<Entry>,
     /// Identifies the recent list the rows were built from, so they are only
     /// rebuilt when it actually changes.
@@ -98,6 +104,7 @@ impl Default for HomeState {
             visible: true,
             section: Section::default(),
             books: crate::books::BooksState::default(),
+            docs: crate::docs::home::DocsHome::default(),
             entries: Vec::new(),
             fingerprint: 0,
         }
@@ -283,6 +290,7 @@ fn nav(ui: &mut Ui, p: &Palette, state: &mut HomeState) {
     for (section, label, icon, count) in [
         (Section::Books, "Books", Icon::Bookmark, Some(books).filter(|n| *n > 0)),
         (Section::Recent, "Recent", Icon::Clock, Some(recent).filter(|n| *n > 0)),
+        (Section::Documents, "Documents", Icon::Document, None),
         (Section::Latex, "LaTeX", Icon::Text, None),
         (Section::Tools, "Tools", Icon::Grid, None),
     ] {
@@ -331,7 +339,7 @@ fn drop_zone(ui: &mut Ui, p: &Palette) {
                 p.accent_text,
             );
             ui.label(
-                egui::RichText::new("Drop a PDF anywhere")
+                egui::RichText::new("Drop a PDF or a .md anywhere")
                     .font(theme::strong(13.0))
                     .color(p.text),
             );
@@ -380,6 +388,7 @@ fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState, prefs: &Prefs) -> Actio
             let (title, subtitle) = match state.section {
                 Section::Books => ("Books", "Every PDF in your folders, shelved by the folder it is in."),
                 Section::Latex => ("LaTeX", "A folder of sources, edited with Vim's keys."),
+                Section::Documents => ("Documents", "Write, comment and ask Claude. Each one is a Markdown file any editor can open."),
                 Section::Recent => ("Recent files", "Pick up where you left off, or start something new."),
                 Section::Tools => ("Tools", "Start a new document here, or open one to edit, export and sign it."),
             };
@@ -388,6 +397,13 @@ fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState, prefs: &Prefs) -> Actio
             ui.label(egui::RichText::new(subtitle).font(theme::body(13.5)).color(p.text_muted));
             ui.add_space(24.0);
 
+            if state.section == Section::Documents {
+                if let Some(a) = crate::docs::home::show(ui, p, &mut state.docs, prefs) {
+                    action = Action::Docs(a);
+                }
+                ui.add_space(20.0);
+                return;
+            }
             if state.section == Section::Latex {
                 action = latex_projects(ui, p, prefs);
                 ui.add_space(20.0);
@@ -424,7 +440,7 @@ fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState, prefs: &Prefs) -> Actio
                 }
                 Section::Tools => tools_note(ui, p),
                 // Drawn above, without the cards.
-                Section::Books | Section::Latex => {}
+                Section::Books | Section::Latex | Section::Documents => {}
             }
             ui.add_space(20.0);
         });

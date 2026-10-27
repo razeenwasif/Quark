@@ -35,6 +35,8 @@ quark-lab.workspace = true
 quark-modal.workspace = true
 quark-syntax.workspace = true
 quark-text.workspace = true
+# The docs editor: documents, their edits and Markdown.
+quark-doc.workspace = true
 quark-lsp.workspace = true
 quark-tex.workspace = true
 quark-literature.workspace = true

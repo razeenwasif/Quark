@@ -124,6 +124,10 @@ pub struct Prefs {
     pub tex_projects: Vec<String>,
     /// Where new LaTeX projects are made.
     pub tex_parent: String,
+    /// Where new documents are written, as typed: `~` is the home folder.
+    pub docs_folder: String,
+    /// Documents opened, the last first.
+    pub docs_recent: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -164,6 +168,8 @@ impl Default for Prefs {
             ocr_langs: vec!["eng".into()],
             tex_projects: Vec::new(),
             tex_parent: "~/Documents/LaTeX".into(),
+            docs_folder: "~/Documents/Writing".into(),
+            docs_recent: Vec::new(),
         }
     }
 }

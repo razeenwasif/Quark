@@ -200,6 +200,17 @@ impl App {
             let title = widgets::elide(&tex.name(), 26, true);
             tex_hit = Some(title_tab(ui, p, Icon::Text, &title, self.tex_visible, !tex.unsaved().is_empty(), true));
         }
+        // Documents in the docs editor. They save themselves, so the dot
+        // only shows while one cannot be saved.
+        let mut doc_hit = None;
+        for (i, doc) in self.docs.tabs.iter().enumerate() {
+            let title = widgets::elide(&doc.title(), 26, true);
+            let stuck = doc.conflict || doc.last_error.is_some();
+            let hit = title_tab(ui, p, Icon::Note, &title, self.docs.shown == Some(i), stuck, true);
+            if hit.close || hit.clicked {
+                doc_hit = Some((i, hit.close));
+            }
+        }
         for (i, tab) in self.tabs.iter().enumerate() {
             let active = self.on_document() && i == self.active;
             let title = widgets::elide(&tab.title(), 26, true);
@@ -210,19 +221,28 @@ impl App {
                 to_select = Some(i);
             }
         }
-        if widgets::icon_button(
+        let plus = widgets::icon_button(
             ui,
             p,
             Icon::Plus,
-            &widgets::platform_keys("Open a file (Ctrl+O)"),
+            &widgets::platform_keys("New document (Ctrl+N), or open a file (Ctrl+O)"),
             32.0,
             false,
             true,
-        )
-        .clicked()
-        {
-            self.dispatch(Command::Open, ctx);
-        }
+        );
+        egui::Popup::menu(&plus).show(|ui| {
+            ui.set_min_width(220.0);
+            for (label, keys, command) in [
+                ("New Document", "Ctrl+N", Command::NewDocument),
+                ("Open…", "Ctrl+O", Command::Open),
+                ("Open LaTeX Project…", "", Command::OpenTexProject),
+            ] {
+                if ui.add(egui::Button::new(label).shortcut_text(widgets::platform_keys(keys))).clicked() {
+                    self.dispatch(command, ctx);
+                    ui.close();
+                }
+            }
+        });
 
         if go_home {
             self.show_home();
@@ -233,6 +253,11 @@ impl App {
             } else if hit.clicked {
                 self.show_tex();
             }
+        }
+        match doc_hit {
+            Some((i, true)) => self.close_document(i, false),
+            Some((i, false)) => self.show_doc(i),
+            None => {}
         }
         if let Some(i) = to_select {
             self.show_tab(i);
@@ -247,6 +272,10 @@ impl App {
     fn command_enabled(&self, cmd: &Command, mutates: bool) -> bool {
         // The LaTeX project's own: saving its file, closing it.
         if self.tex_visible && matches!(cmd, Command::Save | Command::Close) {
+            return true;
+        }
+        // A document's own: saving it, a copy of it, closing it.
+        if self.docs.shown.is_some() && matches!(cmd, Command::Save | Command::SaveAs | Command::Close) {
             return true;
         }
         let Some(tab) = self.tab() else {
@@ -266,6 +295,8 @@ impl App {
                     | Command::ToggleTheme
                     | Command::OpenTexProject
                     | Command::NewTexProject
+                    | Command::NewDocument
+                    | Command::OpenDocument
             ) || matches!(cmd, Command::OpenRecent(_));
         };
         match cmd {
@@ -413,7 +444,7 @@ impl App {
     /// An environment variable wins when set, which is how the Anthropic SDKs
     /// resolve credentials and makes it easy to override for a one-off test
     /// without touching what is stored.
-    fn stored_key(&self, backend: quark_ai::Backend) -> String {
+    pub(crate) fn stored_key(&self, backend: quark_ai::Backend) -> String {
         let env_name = match backend {
             quark_ai::Backend::Anthropic => "ANTHROPIC_API_KEY",
             quark_ai::Backend::OpenAiCompat => "OPENAI_API_KEY",
@@ -1739,6 +1770,15 @@ impl App {
                     self.open_path(&PathBuf::from(r.path), None);
                 }
             }
+            Command::NewDocument => self.new_document(),
+            Command::OpenDocument => self.open_document_dialog(),
+            Command::Save if self.docs.shown.is_some() => self.save_document(),
+            Command::SaveAs if self.docs.shown.is_some() => self.save_document_as(),
+            Command::Close if self.docs.shown.is_some() => {
+                if let Some(i) = self.docs.shown {
+                    self.close_document(i, false);
+                }
+            }
             Command::Save if self.tex_visible => {
                 if let Some(tex) = &mut self.tex {
                     tex.save();
@@ -2497,6 +2537,11 @@ impl App {
                     self.force_close_tab(self.active);
                 }
                 Dialog::Confirm { title, .. } if title == crate::app::CLOSE_TEX => self.close_tex(true),
+                Dialog::Confirm { title, .. } if title == crate::docs::CLOSE_DOC => {
+                    if let Some(i) = self.docs.shown {
+                        self.close_document(i, true);
+                    }
+                }
                 Dialog::Confirm { title, .. } if title == QUIT_UNSAVED => {
                     self.quit_confirmed = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -2761,7 +2806,7 @@ pub(crate) fn link_opens(url: &str) -> Result<&str, String> {
     Ok(url)
 }
 
-fn open_link(url: &str) -> Result<(), String> {
+pub(crate) fn open_link(url: &str) -> Result<(), String> {
     let url = link_opens(url)?;
     let program = if cfg!(windows) {
         "explorer"
@@ -2823,6 +2868,8 @@ impl eframe::App for App {
         self.textures.begin_frame();
         self.drain_service(ctx);
         self.drain_assistant(ctx);
+        self.tend_documents(ctx);
+        self.tend_docs_claude(ctx);
         self.ask_before_quitting(ctx);
 
         // The velvet ground: a fill, the soft light that falls on it from
@@ -2884,7 +2931,7 @@ impl eframe::App for App {
                 // ⌘Z, Delete — and only the file's own commands get past.
                 let filing = matches!(
                     cmd,
-                    Command::Save | Command::SaveAs | Command::Open | Command::Close | Command::CommandPalette
+                    Command::Save | Command::SaveAs | Command::Open | Command::Close | Command::CommandPalette | Command::NewDocument
                 );
                 if !typing || filing {
                     self.dispatch(cmd, ctx);
@@ -2948,11 +2995,17 @@ impl eframe::App for App {
         let mut home_command: Option<Command> = None;
         let mut books_action = None;
         let mut tex_open: Option<PathBuf> = None;
+        let mut docs_action = None;
         let mut env_asked = None;
         let mut work_area = None;
         let action = egui::CentralPanel::default()
             .frame(well)
             .show(ui, |ui| {
+                if self.docs.shown.is_some() {
+                    work_area = Some(ui.max_rect());
+                    self.docs_surface(ui, &p);
+                    return ViewerAction::None;
+                }
                 if self.tex_visible {
                     work_area = Some(ui.max_rect());
                     if let Some(tex) = &mut self.tex {
@@ -2978,6 +3031,7 @@ impl eframe::App for App {
                         crate::home::Action::Run(command) => home_command = Some(command),
                         crate::home::Action::Books(a) => books_action = Some(a),
                         crate::home::Action::OpenTex(path) => tex_open = Some(path),
+                        crate::home::Action::Docs(a) => docs_action = Some(a),
                     }
                     return ViewerAction::None;
                 }
@@ -3020,6 +3074,9 @@ impl eframe::App for App {
         self.handle_viewer_action(action, ctx);
         if let Some(cmd) = home_command {
             self.dispatch(cmd, ctx);
+        }
+        if let Some(a) = docs_action {
+            self.docs_home_action(a);
         }
 
         // Anything the home screen queued.
@@ -3084,6 +3141,9 @@ impl eframe::App for App {
 
     fn on_exit(&mut self) {
         self.library.flush();
+        // Documents save themselves; whatever was typed in the last moment
+        // is saved now.
+        self.save_all_documents();
         // A making left half done is taken away by the next check, but one
         // stopped now leaves less behind.
         if let Some(env) = &mut self.tex_env {
@@ -3448,7 +3508,7 @@ fn highlighted(
 }
 
 /// A folder, with the home directory written as `~`.
-fn tilde(dir: &std::path::Path) -> String {
+pub(crate) fn tilde(dir: &std::path::Path) -> String {
     if let Some(home) = dirs::home_dir() {
         if let Ok(rest) = dir.strip_prefix(&home) {
             return if rest.as_os_str().is_empty() {

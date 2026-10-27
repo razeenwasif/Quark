@@ -16,6 +16,7 @@ mod chrome;
 mod cite;
 mod code;
 mod dialogs;
+mod docs;
 mod grid;
 mod home;
 mod ocr;
