@@ -1,0 +1,17 @@
+[package]
+name = "quark-doc"
+description = "Quark's documents: blocks of styled text, the edits made to them, their history, comments and suggestions, and Markdown in and out — pure, with no UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+# Parsing only: Quark writes its own Markdown, so the output stays as plain as
+# the person would have typed it.
+pulldown-cmark = { version = "0.12", default-features = false }
+unicode-segmentation = "1.12"

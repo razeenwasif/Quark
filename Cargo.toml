@@ -15,6 +15,7 @@ members = [
     "crates/quark-modal",
     "crates/quark-syntax",
     "crates/quark-literature",
+    "crates/quark-doc",
     "xtask",
 ]
 
@@ -36,6 +37,7 @@ default-members = [
     "crates/quark-modal",
     "crates/quark-syntax",
     "crates/quark-literature",
+    "crates/quark-doc",
 ]
 
 [workspace.package]
@@ -60,6 +62,7 @@ quark-lab = { path = "crates/quark-lab" }
 quark-modal = { path = "crates/quark-modal" }
 quark-syntax = { path = "crates/quark-syntax" }
 quark-literature = { path = "crates/quark-literature" }
+quark-doc = { path = "crates/quark-doc" }
 
 # --- ui ---
 egui = "0.36"
