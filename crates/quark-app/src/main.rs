@@ -29,6 +29,7 @@ mod shortcuts;
 mod shot;
 mod tab;
 mod tex;
+mod texagent;
 mod texbuild;
 mod texdock;
 mod texinline;

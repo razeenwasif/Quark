@@ -470,7 +470,12 @@ impl App {
             self.toast(format!("{} is not a folder", root.display()), true);
             return;
         }
-        self.tex = Some(crate::tex::TexProject::open(root));
+        let mut project = crate::tex::TexProject::open(root);
+        if let Some(layout) = self.prefs.tex_layouts.get(&root.display().to_string()) {
+            project.layout = *layout;
+            project.agent.open = layout.agent_open;
+        }
+        self.tex = Some(project);
         // Where TeX stands, looked at without starting anything or asking
         // the network.
         let env = self.tex_env.get_or_insert_with(quark_lab::tex::TexEnv::at_home);

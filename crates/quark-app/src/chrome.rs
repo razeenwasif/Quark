@@ -3017,6 +3017,13 @@ impl eframe::App for App {
                             prefs: &self.prefs,
                         };
                         env_asked = tex.show(ui, &p, state, &mut self.tex_dock, Some(pdf));
+                        // Kept as the panes were left, for next time.
+                        let key = tex.root.display().to_string();
+                        let mut layout = tex.layout;
+                        layout.agent_open = tex.agent.open;
+                        if self.prefs.tex_layouts.get(&key) != Some(&layout) {
+                            self.prefs.tex_layouts.insert(key, layout);
+                        }
                     }
                     return ViewerAction::None;
                 }

@@ -22,6 +22,7 @@
 //! came from.
 
 pub mod anthropic;
+pub mod antigravity;
 pub mod claude_code;
 pub mod context;
 pub mod ollama;
@@ -31,6 +32,7 @@ pub mod service;
 pub mod sse;
 
 pub use anthropic::Anthropic;
+pub use antigravity::Antigravity;
 pub use claude_code::ClaudeCode;
 pub use ollama::Ollama;
 pub use openai::OpenAiCompat;

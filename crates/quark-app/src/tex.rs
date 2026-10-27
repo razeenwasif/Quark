@@ -24,12 +24,74 @@ use crate::texvisual::Pane;
 const MOST_FILES: usize = 2_000;
 /// Folders that are build output or tools', not the project's.
 const PASSED: [&str; 6] = ["node_modules", "target", "build", "_minted", "__pycache__", "out"];
-/// The file list's width.
-const FILES_W: f32 = 230.0;
 /// The dock's width.
 const DOCK_W: f32 = 320.0;
 /// The status line's height.
 const STATUS_H: f32 = 28.0;
+/// How narrow or wide each pane may be dragged.
+const FILES_MIN: f32 = 150.0;
+const FILES_MAX: f32 = 420.0;
+const DOCK_MIN: f32 = 260.0;
+const AGENT_MIN: f32 = 280.0;
+const AGENT_MAX: f32 = 620.0;
+/// The editor keeps at least this; the dock gives way first, then the agent.
+const EDITOR_MIN: f32 = 360.0;
+/// The source's share beside the page, at least and at most.
+const SPLIT: (f32, f32) = (0.2, 0.8);
+/// A seam's width: the gap between islands.
+const SEAM: f32 = 10.0;
+
+/// Where each island goes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Places {
+    pub files: Rect,
+    pub editor: Rect,
+    pub dock: Rect,
+    pub agent: Option<Rect>,
+}
+
+/// The islands across `full`: the files on the left, then the editor, the
+/// dock, and the agent when it is open. `auto_dock` is the dock's width when
+/// it has not been dragged.
+pub(crate) fn place(full: Rect, l: &quark_core::prefs::TexLayout, auto_dock: f32, agent_open: bool) -> Places {
+    let gap = theme::GAP;
+    let files_w = l.files.clamp(FILES_MIN, FILES_MAX);
+    let mut agent_w = if agent_open { l.agent.clamp(AGENT_MIN, AGENT_MAX) } else { 0.0 };
+    let mut dock_w = l.dock.unwrap_or(auto_dock).max(DOCK_MIN);
+    let gaps = gap * if agent_open { 3.0 } else { 2.0 };
+    let over = files_w + dock_w + agent_w + gaps + EDITOR_MIN - full.width();
+    if over > 0.0 {
+        let d = over.min(dock_w - DOCK_MIN);
+        dock_w -= d;
+        if agent_open {
+            agent_w -= (over - d).clamp(0.0, agent_w - AGENT_MIN);
+        }
+    }
+    let files = Rect::from_min_size(full.min, vec2(files_w, full.height()));
+    let agent = agent_open.then(|| Rect::from_min_max(pos2(full.right() - agent_w, full.top()), full.max));
+    let dock_right = agent.map_or(full.right(), |a| a.left() - gap);
+    let dock = Rect::from_min_max(pos2(dock_right - dock_w, full.top()), pos2(dock_right, full.bottom()));
+    let editor = Rect::from_min_max(pos2(files.right() + gap, full.top()), pos2(dock.left() - gap, full.bottom()));
+    Places { files, editor, dock, agent }
+}
+
+/// A seam to drag: a grip, lit while held. Returns how far it moved and
+/// whether it was double-clicked.
+fn seam(ui: &mut Ui, p: &Palette, salt: &str, rect: Rect) -> (f32, bool) {
+    let r = ui.interact(rect, egui::Id::new(("tex-seam", salt)), Sense::click_and_drag());
+    let hot = r.hovered() || r.dragged();
+    if hot {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("tex-seams")));
+    let c = rect.center();
+    if r.dragged() {
+        painter.vline(c.x, rect.y_range(), egui::Stroke::new(1.5, p.accent));
+    }
+    painter.rect_filled(Rect::from_center_size(c, vec2(4.0, 44.0)), CornerRadius::same(2), if hot { p.accent } else { p.wash(0x1a) });
+    let r = r.on_hover_text("Drag to resize · double-click to reset");
+    (r.drag_delta().x, r.double_clicked())
+}
 
 /// A row of the file list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +243,10 @@ pub(crate) struct TexProject {
     pub(crate) picker: Option<Picker>,
     /// The visual editor, and whether it shows in place of the source.
     pub visual: crate::texvisual::Visual,
+    /// The agent: Claude Code or Antigravity, working on the files.
+    pub agent: crate::texagent::Agent,
+    /// How wide each pane was dragged.
+    pub layout: quark_core::prefs::TexLayout,
 }
 
 /// The cite picker: what is typed, what was found, which is chosen.
@@ -299,6 +365,8 @@ impl TexProject {
             outline: (None, Default::default()),
             picker: None,
             visual: Default::default(),
+            agent: Default::default(),
+            layout: Default::default(),
         };
         project.read_outline();
         project.sync();
@@ -616,6 +684,68 @@ impl TexProject {
 
     /// What the editor's area shows — the source, the page or both — and
     /// the source's cursor put at character `at`, if one is given.
+    /// Where the writer is, for the agent: the file in focus, the cursor's
+    /// line, and what the last typesetting complained of.
+    fn agent_context(&self) -> crate::texagent::Context {
+        let buffer = self.session.editor().buffer();
+        let line = buffer.position(buffer.cursor.offset).line;
+        let log = self
+            .builds
+            .log
+            .as_ref()
+            .map(|l| {
+                l.entries
+                    .iter()
+                    .filter(|e| e.kind != quark_tex::log::Kind::Box)
+                    .map(|e| format!("{}{}: {}", e.file.as_deref().unwrap_or(""), e.line.map(|n| format!(":{n}")).unwrap_or_default(), e.message))
+                    .collect()
+            })
+            .unwrap_or_default();
+        crate::texagent::Context { root: self.root.clone(), file: buffer.path().map(Path::to_path_buf), line, log }
+    }
+
+    /// What the agent asked for: a change shown, or a typesetting.
+    fn agent_asks(&mut self, asks: Vec<crate::texagent::AgentAsk>) {
+        for ask in asks {
+            match ask {
+                crate::texagent::AgentAsk::Show(path, line) => {
+                    if self.session.open(&path).is_ok() {
+                        let buffer = self.session.editor().buffer();
+                        let at = buffer.offset_of(quark_text::Position { line: line.min(buffer.len_lines().saturating_sub(1)), column: 0 });
+                        self.session.put_cursor(at);
+                        if self.visual.pane == Pane::Visual {
+                            self.set_pane(Pane::Both, None);
+                        }
+                    }
+                }
+                crate::texagent::AgentAsk::Typeset => {
+                    // A file made or removed belongs in the list.
+                    self.files = walk(&self.root);
+                    self.wants_build = true;
+                }
+            }
+        }
+    }
+
+    fn review_press(&mut self, press: crate::texagent::BarPress) {
+        use crate::texagent::BarPress;
+        let asks = match press {
+            BarPress::Step(back) => {
+                let Some(review) = &mut self.agent.review else { return };
+                review.step(back);
+                review.here().map(|(path, line)| vec![crate::texagent::AgentAsk::Show(path, line)]).unwrap_or_default()
+            }
+            BarPress::Keep | BarPress::Undo => {
+                let (err, asks) = self.agent.decide(matches!(press, BarPress::Keep), false, &mut self.session);
+                if let Some(e) = err {
+                    self.said = Some((format!("could not undo: {e}"), true));
+                }
+                asks
+            }
+        };
+        self.agent_asks(asks);
+    }
+
     pub(crate) fn set_pane(&mut self, pane: Pane, at: Option<usize>) {
         self.visual.flush(&mut self.session);
         if let Some(at) = at {
@@ -701,6 +831,12 @@ impl TexProject {
     /// Keys for the editor, as they came this frame; what it said kept for
     /// the status line, what it yanked put on the clipboard.
     pub(crate) fn input(&mut self, ctx: &egui::Context) {
+        // ⌘⇧A: the agent, whichever pane has the keys.
+        let agent = ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::A));
+        if agent {
+            self.agent.open = !self.agent.open;
+            self.agent.focus = self.agent.open;
+        }
         if self.visual.pane == Pane::Visual {
             return self.visual_input(ctx);
         }
@@ -775,18 +911,33 @@ impl TexProject {
     ) -> Option<TexAsk> {
         let full = ui.available_rect_before_wrap();
         ui.allocate_rect(full, Sense::hover());
-        let files = Rect::from_min_size(full.min, vec2(FILES_W, full.height()));
+        // What the agent did since the last frame.
+        let asks = self.agent.tend(&mut self.session, &self.root, ui.ctx());
+        self.agent_asks(asks);
         // Wide enough to read a page in, once there is TeX to make one.
         let ready = matches!(env, Some(quark_lab::tex::TexState::Ready { .. }));
         // Narrower when the source and the page share the middle.
-        let share = if self.visual.pane == Pane::Both { 0.3 } else { 0.4 };
-        let dock_w = if ready { (full.width() * share).clamp(DOCK_W, 760.0) } else { DOCK_W };
-        let side = Rect::from_min_max(pos2(full.right() - dock_w, full.top()), full.max);
-        let editor = Rect::from_min_max(pos2(files.right() + theme::GAP, full.top()), pos2(side.left() - theme::GAP, full.bottom()));
+        let share = match (self.agent.open, self.visual.pane == Pane::Both) {
+            // The agent takes its own column; the page gives up some of it.
+            (true, true) => 0.22,
+            (true, false) => 0.28,
+            (false, true) => 0.3,
+            (false, false) => 0.4,
+        };
+        let auto_dock = if ready { (full.width() * share).clamp(DOCK_W, 760.0) } else { DOCK_W };
+        let places = place(full, &self.layout, auto_dock, self.agent.open);
+        let (files, editor, side) = (places.files, places.editor, places.dock);
         let painter = ui.ctx().layer_painter(ui.layer_id());
         theme::paint_island(&painter, files, p);
         theme::paint_island(&painter, editor, p);
         theme::paint_island(&painter, side, p);
+        if let Some(a) = places.agent {
+            theme::paint_island(&painter, a, p);
+            let mut agent_ui = ui.new_child(egui::UiBuilder::new().max_rect(a.shrink2(vec2(10.0, 10.0))));
+            let cx = self.agent_context();
+            let asks = crate::texagent::panel(&mut agent_ui, p, &mut self.agent, &mut self.session, &cx);
+            self.agent_asks(asks);
+        }
         let mut asked = None;
         if let Some(state) = env {
             let ready = matches!(state, quark_lab::tex::TexState::Ready { .. });
@@ -824,7 +975,7 @@ impl TexProject {
             Pane::Both => {
                 // The source on the left, the page on the right, a hairline
                 // between.
-                let mid = panes.center().x;
+                let mid = panes.left() + panes.width() * self.layout.split.clamp(SPLIT.0, SPLIT.1);
                 let source = Rect::from_min_max(panes.min, pos2(mid - 0.5, panes.bottom()));
                 let page = Rect::from_min_max(pos2(mid + 0.5, panes.top()), panes.max);
                 self.splits(ui, p, source);
@@ -833,6 +984,50 @@ impl TexProject {
                 self.visual_asked(ui.ctx(), asked);
             }
         }
+        // The agent's changes, a bar to go through them over the source.
+        if self.visual.pane != Pane::Visual {
+            let source_right = if self.visual.pane == Pane::Both { panes.left() + panes.width() * self.layout.split.clamp(SPLIT.0, SPLIT.1) } else { panes.right() };
+            if let Some(review) = &self.agent.review {
+                if let Some(press) = crate::texagent::review_bar(ui, p, pos2(source_right - 10.0, panes.top() + 10.0), review) {
+                    self.review_press(press);
+                }
+            }
+        }
+
+        // The seams, over everything, so they win the pointer at the edges.
+        let gap = |left: Rect, right: Rect| Rect::from_min_max(pos2(left.right(), full.top()), pos2(right.left(), full.bottom()));
+        let (dx, reset) = seam(ui, p, "files", gap(files, editor));
+        if reset {
+            self.layout.files = quark_core::prefs::TexLayout::default().files;
+        } else if dx != 0.0 {
+            self.layout.files = (files.width() + dx).clamp(FILES_MIN, FILES_MAX);
+        }
+        let (dx, reset) = seam(ui, p, "dock", gap(editor, side));
+        if reset {
+            self.layout.dock = None;
+        } else if dx != 0.0 {
+            self.layout.dock = Some((side.width() - dx).max(DOCK_MIN));
+        }
+        if let Some(a) = places.agent {
+            let (dx, reset) = seam(ui, p, "agent", gap(side, a));
+            if reset {
+                self.layout.agent = quark_core::prefs::TexLayout::default().agent;
+            } else if dx != 0.0 {
+                // Between the dock and the agent: one grows as the other gives.
+                self.layout.agent = (a.width() - dx).clamp(AGENT_MIN, AGENT_MAX);
+                self.layout.dock = Some((side.width() + dx).max(DOCK_MIN));
+            }
+        }
+        if self.visual.pane == Pane::Both {
+            let mid = panes.left() + panes.width() * self.layout.split.clamp(SPLIT.0, SPLIT.1);
+            let (dx, reset) = seam(ui, p, "split", Rect::from_min_max(pos2(mid - SEAM / 2.0, panes.top()), pos2(mid + SEAM / 2.0, panes.bottom())));
+            if reset {
+                self.layout.split = 0.5;
+            } else if dx != 0.0 {
+                self.layout.split = ((mid + dx - panes.left()) / panes.width()).clamp(SPLIT.0, SPLIT.1);
+            }
+        }
+
         self.status_line(ui, p, status);
         let switch = Rect::from_min_size(pos2(status.right() - 250.0, status.center().y - 10.0), vec2(168.0, 20.0));
         if let Some(pane) = crate::texvisual::switch(ui, p, switch, self.visual.pane) {
@@ -1176,6 +1371,14 @@ impl TexProject {
                 diagnostics: &diagnostics,
             };
             let (got, cursor) = code::show(ui, p, &self.session, draw, rect);
+            // The agent's changes in this file, over its lines.
+            if let (Some(review), Some(path), Some((_, _, first))) = (&self.agent.review, &path, self.session.view_of(view)) {
+                let marks = review.marks_for(path);
+                if !marks.is_empty() {
+                    let text = Rect::from_min_max(pos2(rect.left() + m.gutter_w, rect.top()), rect.max);
+                    crate::texagent::paint_marks(&ui.painter_at(rect), text, first, m.line_h, &marks, p);
+                }
+            }
             if view == focused {
                 self.cursor_at = cursor;
             }

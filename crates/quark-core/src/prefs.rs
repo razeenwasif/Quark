@@ -124,6 +124,8 @@ pub struct Prefs {
     pub tex_projects: Vec<String>,
     /// Where new LaTeX projects are made.
     pub tex_parent: String,
+    /// How each LaTeX project's panes were left, by its folder.
+    pub tex_layouts: std::collections::BTreeMap<String, TexLayout>,
     /// Where new documents are written, as typed: `~` is the home folder.
     pub docs_folder: String,
     /// Documents opened, the last first.
@@ -168,6 +170,7 @@ impl Default for Prefs {
             ocr_langs: vec!["eng".into()],
             tex_projects: Vec::new(),
             tex_parent: "~/Documents/LaTeX".into(),
+            tex_layouts: Default::default(),
             docs_folder: "~/Documents/Writing".into(),
             docs_recent: Vec::new(),
         }
@@ -175,6 +178,27 @@ impl Default for Prefs {
 }
 
 /// An entry in the Recent Files list.
+/// A LaTeX project's panes, as they were dragged.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TexLayout {
+    /// The file list's width, in points.
+    pub files: f32,
+    /// The PDF dock's width; none to size it to the window.
+    pub dock: Option<f32>,
+    /// The agent's width.
+    pub agent: f32,
+    /// The source's share of the editor when it is beside the page.
+    pub split: f32,
+    pub agent_open: bool,
+}
+
+impl Default for TexLayout {
+    fn default() -> Self {
+        TexLayout { files: 230.0, dock: None, agent: 340.0, split: 0.5, agent_open: false }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecentFile {
     pub path: String,
