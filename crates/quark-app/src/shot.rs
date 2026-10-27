@@ -226,4 +226,56 @@ mod tests {
         })
         .unwrap();
     }
+
+    #[test]
+    #[ignore = "draws pictures; run with QUARK_SHOTS set"]
+    fn shot_the_page_grid() {
+        let Some(dir) = folder() else { return };
+        use quark_core::geom::PageSize;
+        use quark_pdf::doc::{DocInfo, PageInfo};
+        let pages: Vec<PageInfo> = (0..14)
+            .map(|i| PageInfo {
+                size: if i == 5 { PageSize::new(792.0, 612.0) } else { PageSize::LETTER },
+                label: (i < 2).then(|| ["i", "ii"][i].to_string()),
+                ..Default::default()
+            })
+            .collect();
+        let info = DocInfo { page_count: pages.len(), pages, ..Default::default() };
+        let ctx = egui::Context::default();
+        theme::install_fonts(&ctx);
+        theme::apply(&ctx, ThemeMode::Dark);
+        let p = Palette::for_mode(ThemeMode::Dark);
+        let mut tab = crate::tab::Tab::new(1, info, quark_core::layout::PageMode::Continuous, quark_core::layout::ZoomMode::FitWidth);
+        tab.grid = true;
+        tab.current_page = 3;
+        tab.selected_pages = vec![3, 4, 6];
+        let service = quark_pdf::service::PdfService::start();
+        let mut textures = crate::textures::TextureCache::new(256);
+        let prefs = quark_core::prefs::Prefs::default();
+        // A page of lines for each, so the grid has something to show.
+        // Drawn at 2×, as `shoot` does; set here it would only apply from the
+        // first frame on.
+        let edge = 300;
+        for page in 0..tab.page_count() {
+            let size = tab.info.page_size(page);
+            let scale = edge as f32 / size.width.max(size.height);
+            let (w, h) = ((size.width * scale) as u32, (size.height * scale) as u32);
+            let mut rgba = vec![255u8; (w * h * 4) as usize];
+            for y in (h / 8..h * 7 / 8).step_by(9) {
+                let right = if y % 5 == 0 { w * 3 / 5 } else { w * 7 / 8 };
+                for x in w / 8..right {
+                    let at = ((y * w + x) * 4) as usize;
+                    rgba[at..at + 3].copy_from_slice(&[150, 150, 158]);
+                }
+            }
+            let key = crate::textures::PageKey::new(page, scale, quark_core::geom::Rot::D0, prefs.tint);
+            textures.insert(&ctx, key, &Raster { width: w, height: h, rgba });
+        }
+        shoot(&ctx, egui::vec2(1100.0, 760.0), 4, &dir.join("page-grid.png"), |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(p.canvas)).show(ui, |ui| {
+                crate::grid::show(ui, &p, &mut tab, &service, &mut textures, &prefs);
+            });
+        })
+        .unwrap();
+    }
 }

@@ -48,6 +48,8 @@ pub enum ViewerAction {
     Then(Box<ViewerAction>, Box<ViewerAction>),
     /// A link out of the document, to open in the browser.
     OpenLink(String),
+    /// What the page grid asked for.
+    Grid(crate::grid::GridAction),
     /// A link was followed.
     GoToPage(usize),
 }

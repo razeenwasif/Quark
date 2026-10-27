@@ -61,6 +61,8 @@ pub enum Command {
     ToggleStatusBar,
     FullScreen,
     ReadingMode,
+    /// Every page small, to choose and rearrange.
+    PageGrid,
     ToggleTheme,
 
     // --- navigation ---
@@ -294,6 +296,7 @@ pub fn command_table() -> Vec<CommandInfo> {
         C::ToggleStatusBar, "Show Page Controls", View, "", false;
         C::FullScreen, "Full Screen", View, "F11", false;
         C::ReadingMode, "Reading Mode", View, "Ctrl+H", false;
+        C::PageGrid, "Page Grid", View, "Ctrl+Shift+G", false;
         C::ToggleTheme, "Toggle Light/Dark Theme", View, "", false;
 
         // Navigate

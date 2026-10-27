@@ -14,6 +14,7 @@ mod assistant;
 mod books;
 mod chrome;
 mod dialogs;
+mod grid;
 mod home;
 /// Quark's application icon, shared with `build.rs` so the pinned Explorer
 /// icon and the runtime window icon are generated from one definition.

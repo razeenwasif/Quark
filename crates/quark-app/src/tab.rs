@@ -111,6 +111,8 @@ pub struct Tab {
     pub selection: Option<TextSelection>,
     pub selected_annotation: Option<AnnotId>,
     pub selected_pages: Vec<usize>,
+    /// The page grid is shown in place of the pages.
+    pub grid: bool,
     pub drafting: Drafting,
     pub search: SearchState,
     /// An annotation being dragged, and how far it has gone: one change
@@ -261,6 +263,7 @@ impl Tab {
             selection: None,
             selected_annotation: None,
             selected_pages: Vec::new(),
+            grid: false,
             drafting: Drafting::None,
             search: SearchState::default(),
             moving: None,

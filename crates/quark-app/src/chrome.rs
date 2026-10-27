@@ -1209,6 +1209,12 @@ impl App {
                     {
                         self.dispatch(Command::NextPage, ctx);
                     }
+                    let grid = self.tab().is_some_and(|t| t.grid);
+                    if widgets::tool_button(ui, p, Icon::Grid, &widgets::platform_keys("Page grid (Ctrl+Shift+G)"), grid, count > 0)
+                        .clicked()
+                    {
+                        self.dispatch(Command::PageGrid, ctx);
+                    }
 
                     widgets::separator(ui, p);
 
@@ -1796,10 +1802,16 @@ impl App {
             Command::Cut | Command::Paste => {
                 self.toast("Cut and paste apply to page content, which is not editable yet", false)
             }
+            Command::Delete if self.tab().is_some_and(|t| t.grid) => self.dispatch(Command::DeletePages, ctx),
             Command::Delete => {
                 let id = self.tab().and_then(|t| t.selected_annotation);
                 if let Some(id) = id {
                     self.delete_annotation(id);
+                }
+            }
+            Command::SelectAll if self.tab().is_some_and(|t| t.grid) => {
+                if let Some(t) = self.tab_mut() {
+                    t.selected_pages = (0..t.page_count()).collect();
                 }
             }
             Command::SelectAll => {
@@ -1892,6 +1904,14 @@ impl App {
             Command::FullScreen => {
                 let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+            }
+            Command::PageGrid => {
+                if let Some(t) = self.tab_mut() {
+                    t.grid = !t.grid;
+                    if t.grid && t.selected_pages.is_empty() {
+                        t.selected_pages = vec![t.current_page];
+                    }
+                }
             }
             Command::ReadingMode => {
                 // Hides everything but the page.
@@ -2385,6 +2405,7 @@ impl App {
 
     fn handle_viewer_action(&mut self, action: ViewerAction, ctx: &Context) {
         match action {
+            ViewerAction::Grid(a) => self.grid_action(a, ctx),
             ViewerAction::OpenLink(url) => {
                 if let Err(e) = open_link(&url) {
                     self.toast(e, true);
@@ -2545,6 +2566,44 @@ impl App {
 }
 
 impl App {
+    /// What the page grid asked for, done to the pages chosen.
+    fn grid_action(&mut self, action: crate::grid::GridAction, ctx: &Context) {
+        use crate::grid::GridAction;
+        match action {
+            GridAction::None => {}
+            GridAction::Read(page) => {
+                if let Some(t) = self.tab_mut() {
+                    t.grid = false;
+                    t.go_to_page(page);
+                }
+            }
+            GridAction::Turn(cw) => {
+                self.dispatch(if cw { Command::RotatePagesCw } else { Command::RotatePagesCcw }, ctx)
+            }
+            GridAction::Delete => self.dispatch(Command::DeletePages, ctx),
+            GridAction::Blank => {
+                let Some(t) = self.tab() else { return };
+                let Some(&last) = t.selected_pages.iter().max() else { return };
+                let size = t.info.page_size(last);
+                self.apply_op(DocOp::InsertBlankPage { at: last + 1, size });
+                if let Some(t) = self.tab_mut() {
+                    t.selected_pages = vec![last + 1];
+                }
+            }
+            GridAction::Move { pages, before } => {
+                let Some(count) = self.tab().map(|t| t.page_count()) else { return };
+                if let Some((order, at)) = crate::grid::moved(count, &pages, before) {
+                    let n = pages.len();
+                    self.apply_op(DocOp::ReorderPages(order));
+                    // Still chosen, where they now are.
+                    if let Some(t) = self.tab_mut() {
+                        t.selected_pages = (at..at + n).collect();
+                    }
+                }
+            }
+        }
+    }
+
     /// A field clicked, or chosen in the Fields panel.
     fn activate_field(&mut self, field: quark_pdf::forms::FormField) {
         use crate::tab::FieldClick;
@@ -2798,6 +2857,12 @@ impl eframe::App for App {
                 let (service, textures, prefs, tool) =
                     (&self.service, &mut self.textures, &self.prefs, self.tool);
                 let action = match self.tabs.get_mut(index) {
+                    Some(tab) if tab.grid => {
+                        match crate::grid::show(ui, &p, tab, service, textures, prefs) {
+                            crate::grid::GridAction::None => ViewerAction::None,
+                            a => ViewerAction::Grid(a),
+                        }
+                    }
                     Some(tab) => viewer::show(ui, &p, tab, service, textures, prefs, tool),
                     None => ViewerAction::None,
                 };
