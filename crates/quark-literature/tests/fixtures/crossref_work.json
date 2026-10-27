@@ -1,0 +1,184 @@
+{
+  "message": {
+    "DOI": "10.1038/nature14539",
+    "ISSN": [
+      "0028-0836",
+      "1476-4687"
+    ],
+    "URL": "https://doi.org/10.1038/nature14539",
+    "alternative-id": [
+      "BFnature14539"
+    ],
+    "author": [
+      {
+        "affiliation": [],
+        "family": "LeCun",
+        "given": "Yann",
+        "role": [
+          {
+            "role": "author",
+            "vocabulary": "crossref"
+          }
+        ],
+        "sequence": "first"
+      },
+      {
+        "affiliation": [],
+        "family": "Bengio",
+        "given": "Yoshua",
+        "role": [
+          {
+            "role": "author",
+            "vocabulary": "crossref"
+          }
+        ],
+        "sequence": "additional"
+      },
+      {
+        "affiliation": [],
+        "family": "Hinton",
+        "given": "Geoffrey",
+        "role": [
+          {
+            "role": "author",
+            "vocabulary": "crossref"
+          }
+        ],
+        "sequence": "additional"
+      }
+    ],
+    "container-title": [
+      "Nature"
+    ],
+    "content-domain": {
+      "crossmark-restriction": false,
+      "domain": [
+        "link.springer.com"
+      ]
+    },
+    "created": {
+      "date-parts": [
+        [
+          2015,
+          5,
+          26
+        ]
+      ],
+      "date-time": "2015-05-26T12:10:15Z",
+      "timestamp": 1432642215000
+    },
+    "deposited": {
+      "date-parts": [
+        [
+          2023,
+          8,
+          10
+        ]
+      ],
+      "date-time": "2023-08-10T18:12:02Z",
+      "timestamp": 1691691122000
+    },
+    "indexed": {
+      "date-parts": [
+        [
+          2026,
+          10,
+          5
+        ]
+      ],
+      "date-time": "2026-10-05T15:05:09Z",
+      "timestamp": 1791212709140,
+      "version": "4.1.0"
+    },
+    "is-referenced-by-count": 77927,
+    "issn-type": [
+      {
+        "type": "print",
+        "value": "0028-0836"
+      },
+      {
+        "type": "electronic",
+        "value": "1476-4687"
+      }
+    ],
+    "issue": "7553",
+    "issued": {
+      "date-parts": [
+        [
+          2015,
+          5,
+          27
+        ]
+      ]
+    },
+    "journal-issue": {
+      "issue": "7553",
+      "published-print": {
+        "date-parts": [
+          [
+            2015,
+            5,
+            28
+          ]
+        ]
+      }
+    },
+    "language": "en",
+    "member": "297",
+    "original-title": [],
+    "page": "436-444",
+    "prefix": "10.1038",
+    "published": {
+      "date-parts": [
+        [
+          2015,
+          5,
+          27
+        ]
+      ]
+    },
+    "published-online": {
+      "date-parts": [
+        [
+          2015,
+          5,
+          27
+        ]
+      ]
+    },
+    "published-print": {
+      "date-parts": [
+        [
+          2015,
+          5,
+          28
+        ]
+      ]
+    },
+    "publisher": "Springer Science and Business Media LLC",
+    "reference-count": 103,
+    "references-count": 103,
+    "resource": {
+      "primary": {
+        "URL": "https://www.nature.com/articles/nature14539"
+      }
+    },
+    "score": 1,
+    "short-container-title": [
+      "Nature"
+    ],
+    "short-title": [],
+    "source": "Crossref",
+    "subject": [],
+    "subtitle": [],
+    "title": [
+      "Deep learning"
+    ],
+    "type": "journal-article",
+    "update-policy": "https://doi.org/10.1007/springer_crossmark_policy",
+    "volume": "521"
+  },
+  "message-type": "work",
+  "message-version": "1.0.0",
+  "status": "ok"
+}

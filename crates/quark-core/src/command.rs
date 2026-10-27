@@ -63,6 +63,8 @@ pub enum Command {
     ReadingMode,
     /// A folder of LaTeX sources, opened in the editor.
     OpenTexProject,
+    /// A LaTeX project made from a template.
+    NewTexProject,
     /// Every page small, to choose and rearrange.
     PageGrid,
     ToggleTheme,
@@ -237,6 +239,7 @@ pub fn command_table() -> Vec<CommandInfo> {
         C::Save, "Save", File, "Ctrl+S", true;
         C::SaveAs, "Save As…", File, "Ctrl+Shift+S", true;
         C::OpenTexProject, "Open LaTeX Project…", File, "", false;
+        C::NewTexProject, "New LaTeX Project…", File, "", false;
         C::SaveACopy, "Save a Copy…", File, "", false;
         C::Revert, "Revert to Saved", File, "", true;
         C::Close, "Close", File, "Ctrl+W", false;

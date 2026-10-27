@@ -38,6 +38,8 @@ pub enum DialogResult {
     Split { every: Option<u32>, at: Vec<u32> },
     /// Pages (from 0) to read with OCR, in these languages.
     Ocr { pages: Vec<usize>, langs: Vec<String> },
+    /// A LaTeX project to make: from template `id`, called `name`, in `parent`.
+    NewTex { id: String, name: String, parent: String },
     /// The user confirmed a destructive action.
     Confirmed,
 }
@@ -85,6 +87,13 @@ pub enum Dialog {
         at: usize,
         width: String,
         height: String,
+    },
+    /// A new LaTeX project: which template, what it is called, and where.
+    NewTex {
+        templates: Vec<quark_tex::templates::TemplateView>,
+        chosen: usize,
+        name: String,
+        parent: String,
     },
     /// Which pages to read with OCR, and in what languages.
     Ocr {
@@ -136,6 +145,7 @@ impl Dialog {
             Dialog::InsertBlank { .. } => "Insert Blank Page",
             Dialog::Split { .. } => "Split Document",
             Dialog::Ocr { .. } => "Recognise Text",
+            Dialog::NewTex { .. } => "New LaTeX Project",
             Dialog::Confirm { title, .. } => title,
             Dialog::Message { title, .. } => title,
             Dialog::About => "About Quark",
@@ -528,6 +538,61 @@ impl Dialog {
                     });
                 }
 
+                Dialog::NewTex { templates, chosen, name, parent } => {
+                    ui.set_min_width(560.0);
+                    ui.label(RichText::new("A folder of its own, made from a template.").color(p.text_muted).size(12.0));
+                    ui.add_space(8.0);
+                    // The templates, two to a row.
+                    egui::Grid::new("tex-templates").num_columns(2).spacing(egui::vec2(10.0, 10.0)).show(ui, |ui| {
+                        for (i, t) in templates.iter().enumerate() {
+                            let (rect, response) = ui.allocate_exact_size(egui::vec2(272.0, 64.0), egui::Sense::click());
+                            let on = i == *chosen;
+                            ui.painter().rect_filled(rect, egui::CornerRadius::same(10), if on { p.accent_soft } else { p.wash(0x08) });
+                            if on {
+                                ui.painter().rect_stroke(rect, egui::CornerRadius::same(10), egui::Stroke::new(1.5, p.accent), egui::StrokeKind::Inside);
+                            }
+                            ui.painter().text(rect.left_top() + egui::vec2(12.0, 10.0), egui::Align2::LEFT_TOP, &t.name, theme::strong(13.0), p.text);
+                            let about = quark_ui::widgets::elide(&t.about, 44, false);
+                            ui.painter().text(rect.left_top() + egui::vec2(12.0, 32.0), egui::Align2::LEFT_TOP, about, theme::body(11.5), p.text_muted);
+                            if response.on_hover_text(&t.about).clicked() {
+                                *chosen = i;
+                            }
+                            if i % 2 == 1 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Name");
+                        ui.add(egui::TextEdit::singleline(name).desired_width(240.0).hint_text("my-paper"));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("In");
+                        ui.label(RichText::new(parent.as_str()).color(p.text_muted));
+                        if ui.small_button("Choose…").clicked() {
+                            if let Some(dir) = rfd::FileDialog::new().set_title("Make the project in").pick_folder() {
+                                *parent = quark_pdf::library::tilde(&dir);
+                            }
+                        }
+                    });
+                    let ok = new_tex_name_ok(name);
+                    if !name.trim().is_empty() && !ok {
+                        ui.label(RichText::new("A name of letters, digits, spaces, - and _.").color(p.warning).size(11.5));
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(ok, egui::Button::new("Make")).clicked() {
+                            if let Some(t) = templates.get(*chosen) {
+                                result = DialogResult::NewTex { id: t.id.clone(), name: name.trim().to_string(), parent: parent.clone() };
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            result = DialogResult::Cancelled;
+                        }
+                    });
+                }
+
                 Dialog::Ocr { blank, chosen, count, which, langs, picked } => {
                     use crate::ocr::Which;
                     ui.label(
@@ -759,6 +824,13 @@ fn stamp_form(
 }
 
 /// Parses a one-based page number, returning a zero-based index.
+/// Whether a project's name will do as a folder's: letters, digits, spaces,
+/// `-` and `_`, not starting with a dot.
+pub fn new_tex_name_ok(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty() && !name.starts_with('.') && name.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '_')
+}
+
 /// What tesseract's language codes are called, for the common ones; the
 /// code itself for the rest.
 pub fn language_name(code: &str) -> String {

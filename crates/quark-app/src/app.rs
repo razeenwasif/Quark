@@ -455,6 +455,23 @@ impl App {
         self.show_tex();
     }
 
+    /// Make a LaTeX project from template `id`, called `name`, in `parent`
+    /// (`~` the home folder), and open it, typeset.
+    pub(crate) fn new_tex(&mut self, id: &str, name: &str, parent: &str) {
+        let at = quark_pdf::library::expand(parent);
+        match quark_tex::templates::create(id, &at, name) {
+            Ok(made) => {
+                self.prefs.tex_parent = parent.to_string();
+                self.open_tex(&made.folder);
+                if let Some(tex) = &mut self.tex {
+                    tex.open_at(&made.main.display().to_string(), 1);
+                    tex.wants_build = true;
+                }
+            }
+            Err(why) => self.toast(format!("The project could not be made: {why}"), true),
+        }
+    }
+
     /// Close the LaTeX project; unless forced, not with unsaved files.
     pub(crate) fn close_tex(&mut self, force: bool) {
         let Some(open) = &self.tex else { return };

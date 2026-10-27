@@ -1,0 +1,187 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/rq/NVrJFKywuTD9Hgs3yTRthLAA</id>
+  <title>arXiv Query: search_query=all:rayleigh AND all:scattering AND all:sky AND all:colour&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-10-05T21:03:03Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:rayleigh+AND+(all:scattering+AND+(all:sky+AND+all:colour))&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>3</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2208.11215v2</id>
+    <title>Unidentified aerial phenomena I. Observations of events</title>
+    <updated>2022-09-16T19:11:05Z</updated>
+    <link href="https://arxiv.org/abs/2208.11215v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2208.11215v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>NASA commissioned a research team to study Unidentified Aerial Phenomena (UAP), observations of events that cannot scientifically be identified as known natural phenomena. The Main Astronomical Observatory of NAS of Ukraine conducts an independent study of UAP also. For UAP observations, we used two meteor stations. Observations were performed with colour video cameras in the daytime sky. We have developed a special observation technique, for detecting and evaluating UAP characteristics. According to our data, there are two types of UAP, which we conventionally call: (1) Cosmics, and (2) Phantoms. We note that Cosmics are luminous objects, brighter than the background of the sky. Phantoms are dark objects, with contrast from several to about 50 per cent. We observe a significant number of objects whose nature is not clear. Flights of single, group and squadrons of the ships were detected, moving at speeds from 3 to 15 degrees per second. Some bright objects exhibit regular brightness variability in the range of 10 - 20 Hz. We use colourimetry methods to determine of distance to objects and evaluate their colour characteristics. Objects RGB colours of the Adobe colour system had converted to the Johnson BVR astronomical colour system using the colour corrections. Phantom shows the colour characteristics inherent in an object with zero albedos. It is a completely black body that does not emit and absorbs all the radiation falling on it. We see an object because it shields radiation due to Rayleigh scattering. An object contrast makes it possible to estimate the distance using colourimetric methods. Phantoms are observed in the troposphere at distances up to 10 - 12 km. We estimate their size from 3 to 12 meters and speeds up to 15 km/s.</summary>
+    <category term="astro-ph.IM" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="physics.pop-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2022-08-23T22:15:52Z</published>
+    <arxiv:comment>8 pages, 23 figures, Odessa Astronomical Publications</arxiv:comment>
+    <arxiv:primary_category term="astro-ph.IM"/>
+    <author>
+      <name>B. E. Zhilyaev</name>
+    </author>
+    <author>
+      <name>V. N. Petukhov</name>
+    </author>
+    <author>
+      <name>V. M. Reshetnyk</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/astro-ph/0609195v1</id>
+    <title>Biomarkers in disk-averaged near-UV to near-IR Earth spectra using Earthshine observations</title>
+    <updated>2006-09-07T13:38:39Z</updated>
+    <link href="https://arxiv.org/abs/astro-ph/0609195v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/astro-ph/0609195v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  We analyse the detectability of vegetation on a global scale on Earth's surface. Considering its specific reflectance spectrum showing a sharp edge around 700 nm, vegetation can be considered as a potential global biomarker. This work, based on observational data, aims to characterise and to quantify this signature in the disk-averaged Earth's spectrum. Earthshine spectra have been used to test the detectability of the "Vegetation Red Edge" (VRE) in the Earth spectrum. We obtained reflectance spectra from near UV (320 nm) to near IR (1020 nm) for different Earth phases (continents or oceans seen from the Moon) with EMMI on the NTT at ESO/La Silla, Chile. We accurately correct the sky background and take into account the phase-dependent colour of the Moon. VRE measurements require a correction of the ozone Chappuis absorption band and Rayleigh plus aerosol scattering. Results : The near-UV spectrum shows a dark Earth below 350 nm due to the ozone absorption. The Vegetation Red Edge is observed when forests are present (4.0% for Africa and Europe), and is lower when clouds and oceans are mainly visible (1.3% for the Pacific Ocean). Errors are typically $\pm0.5$, and $\pm1.5$ in the worst case. We discuss the different sources of errors and bias and suggest possible improvements. We showed that measuring the VRE or an analog on an Earth-like planet remains very difficult (photometric relative accuracy of 1% or better). It remains a small feature compared to atmospheric absorption lines. A direct monitoring from space of the global (disk-averaged) Earth's spectrum would provide the best VRE follow-up.</summary>
+    <category term="astro-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2006-09-07T13:38:39Z</published>
+    <arxiv:comment>Accepted for publication in A&amp;A. 9 pages, 8 figures</arxiv:comment>
+    <arxiv:primary_category term="astro-ph"/>
+    <author>
+      <name>Slim Hamdani</name>
+      <arxiv:affiliation>OHP</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Luc Arnold</name>
+      <arxiv:affiliation>OHP</arxiv:affiliation>
+    </author>
+    <author>
+      <name>C. Foellmi</name>
+      <arxiv:affiliation>LAOG</arxiv:affiliation>
+    </author>
+    <author>
+      <name>J. Berthier</name>
+      <arxiv:affiliation>IMCCE</arxiv:affiliation>
+    </author>
+    <author>
+      <name>M. Billeres</name>
+      <arxiv:affiliation>LAOG</arxiv:affiliation>
+    </author>
+    <author>
+      <name>D. Briot</name>
+      <arxiv:affiliation>OP</arxiv:affiliation>
+    </author>
+    <author>
+      <name>P. François</name>
+      <arxiv:affiliation>OP</arxiv:affiliation>
+    </author>
+    <author>
+      <name>P. Riaud</name>
+      <arxiv:affiliation>LESIA</arxiv:affiliation>
+    </author>
+    <author>
+      <name>J. Schneider</name>
+      <arxiv:affiliation>OP</arxiv:affiliation>
+    </author>
+    <arxiv:doi>10.1051/0004-6361:20065032</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1051/0004-6361:20065032" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2007.11851v1</id>
+    <title>Obliquity measurement and atmospheric characterization of the WASP-74 planetary system</title>
+    <updated>2020-07-23T08:24:36Z</updated>
+    <link href="https://arxiv.org/abs/2007.11851v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2007.11851v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We present new transit observations of the hot Jupiter WASP-74 b ($T_\mathrm{eq} \sim$ 1860 K) using the high-resolution spectrograph HARPS-N and the multi-colour simultaneous imager MuSCAT2. We refine the orbital properties of the planet and its host star, and measure its obliquity for the first time. The measured sky-projected angle between the stellar spin-axis and the planet's orbital axis is compatible with an orbit well-aligned with the equator of the host star ($λ= 0.77\pm0.99 \mathrm{deg}$). We are not able to detect any absorption feature of H$α$, or any other atomic spectral features, in its high-resolution transmission spectra due to low S/N at the line cores. Despite previous claims regarding the presence of strong optical absorbers such TiO and VO gases in the atmosphere of WASP-74 b, the new ground-based photometry combined with a reanalysis of previously reported observations from the literature shows a slope in the low-resolution transmission spectrum steeper than expected from Rayleigh scattering alone.</summary>
+    <category term="astro-ph.EP" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2020-07-23T08:24:36Z</published>
+    <arxiv:comment>Accepted for publication in Astronomy &amp; Astrophysics. 12 pages, 8 figures, 5 tables</arxiv:comment>
+    <arxiv:primary_category term="astro-ph.EP"/>
+    <arxiv:journal_ref>A&amp;A 642, A50 (2020)</arxiv:journal_ref>
+    <author>
+      <name>R. Luque</name>
+    </author>
+    <author>
+      <name>N. Casasayas-Barris</name>
+    </author>
+    <author>
+      <name>H. Parviainen</name>
+    </author>
+    <author>
+      <name>G. Chen</name>
+    </author>
+    <author>
+      <name>E. Pallé</name>
+    </author>
+    <author>
+      <name>J. Livingston</name>
+    </author>
+    <author>
+      <name>V. J. S. Béjar</name>
+    </author>
+    <author>
+      <name>N. Crouzet</name>
+    </author>
+    <author>
+      <name>E. Esparza-Borges</name>
+    </author>
+    <author>
+      <name>A. Fukui</name>
+    </author>
+    <author>
+      <name>D. Hidalgo</name>
+    </author>
+    <author>
+      <name>Y. Kawashima</name>
+    </author>
+    <author>
+      <name>K. Kawauchi</name>
+    </author>
+    <author>
+      <name>P. Klagyivik</name>
+    </author>
+    <author>
+      <name>S. Kurita</name>
+    </author>
+    <author>
+      <name>N. Kusakabe</name>
+    </author>
+    <author>
+      <name>J. P. de Leon</name>
+    </author>
+    <author>
+      <name>A. Madrigal-Aguado</name>
+    </author>
+    <author>
+      <name>P. Montañés-Rodríguez</name>
+    </author>
+    <author>
+      <name>M. Mori</name>
+    </author>
+    <author>
+      <name>F. Murgas</name>
+    </author>
+    <author>
+      <name>N. Narita</name>
+    </author>
+    <author>
+      <name>T. Nishiumi</name>
+    </author>
+    <author>
+      <name>G. Nowak</name>
+    </author>
+    <author>
+      <name>M. Oshagh</name>
+    </author>
+    <author>
+      <name>M. Sánchez-Benavente</name>
+    </author>
+    <author>
+      <name>M. Stangret</name>
+    </author>
+    <author>
+      <name>M. Tamura</name>
+    </author>
+    <author>
+      <name>Y. Terada</name>
+    </author>
+    <author>
+      <name>N. Watanabe</name>
+    </author>
+    <arxiv:doi>10.1051/0004-6361/202038703</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1051/0004-6361/202038703" title="doi"/>
+  </entry>
+</feed>

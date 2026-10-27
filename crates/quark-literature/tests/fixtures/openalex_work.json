@@ -1,0 +1,376 @@
+{
+  "abstract_inverted_index": null,
+  "authorships": [
+    {
+      "affiliations": [
+        {
+          "institution_ids": [
+            "https://openalex.org/I4210114444",
+            "https://openalex.org/I57206974"
+          ],
+          "raw_affiliation_string": "1] Facebook AI Research, 770 Broadway, New York, New York 10003 USA. [2] New York University, 715 Broadway, New York, New York 10003, USA"
+        },
+        {
+          "institution_ids": [
+            "https://openalex.org/I4210114444"
+          ],
+          "raw_affiliation_string": "Facebook AI Research, 770 Broadway, New York, 10003, New York, USA"
+        },
+        {
+          "institution_ids": [
+            "https://openalex.org/I57206974"
+          ],
+          "raw_affiliation_string": "New York University, 715 Broadway, New York, 10003, New York, USA"
+        }
+      ],
+      "author": {
+        "display_name": "Yann LeCun",
+        "id": "https://openalex.org/A5001226970",
+        "observed_orcids": [
+          "https://orcid.org/0000-0002-1992-2684"
+        ],
+        "orcid": "https://orcid.org/0000-0002-1992-2684"
+      },
+      "author_position": "first",
+      "countries": [
+        "US"
+      ],
+      "institutions": [
+        {
+          "country_code": "US",
+          "display_name": "Meta (United States)",
+          "id": "https://openalex.org/I4210114444",
+          "lineage": [
+            "https://openalex.org/I4210114444"
+          ],
+          "ror": "https://ror.org/01zbnvs85",
+          "type": "company"
+        },
+        {
+          "country_code": "US",
+          "display_name": "New York University",
+          "id": "https://openalex.org/I57206974",
+          "lineage": [
+            "https://openalex.org/I57206974"
+          ],
+          "ror": "https://ror.org/0190ak572",
+          "type": "education"
+        }
+      ],
+      "is_corresponding": true,
+      "raw_affiliation_strings": [
+        "1] Facebook AI Research, 770 Broadway, New York, New York 10003 USA. [2] New York University, 715 Broadway, New York, New York 10003, USA",
+        "Facebook AI Research, 770 Broadway, New York, 10003, New York, USA",
+        "New York University, 715 Broadway, New York, 10003, New York, USA"
+      ],
+      "raw_author_name": "Yann LeCun",
+      "raw_orcid": null
+    },
+    {
+      "affiliations": [
+        {
+          "institution_ids": [
+            "https://openalex.org/I70931966"
+          ],
+          "raw_affiliation_string": "Department of Computer Science and Operations Research Université de Montréal, Pavillon André-Aisenstadt, PO Box 6128 Centre-Ville STN Montréal, Quebec H3C 3J7, Canada"
+        },
+        {
+          "institution_ids": [
+            "https://openalex.org/I70931966"
+          ],
+          "raw_affiliation_string": "Department of Computer Science and Operations Research Université de Montréal, Pavillon André-Aisenstadt, PO Box 6128 Centre-Ville STN, Montréal, H3C 3J7, Quebec, Canada"
+        }
+      ],
+      "author": {
+        "display_name": "Yoshua Bengio",
+        "id": "https://openalex.org/A5086198262",
+        "observed_orcids": [
+          "https://orcid.org/0000-0002-9322-3515"
+        ],
+        "orcid": "https://orcid.org/0000-0002-9322-3515"
+      },
+      "author_position": "middle",
+      "countries": [
+        "CA"
+      ],
+      "institutions": [
+        {
+          "country_code": "CA",
+          "display_name": "Université de Montréal",
+          "id": "https://openalex.org/I70931966",
+          "lineage": [
+            "https://openalex.org/I70931966"
+          ],
+          "ror": "https://ror.org/0161xgx34",
+          "type": "education"
+        }
+      ],
+      "is_corresponding": false,
+      "raw_affiliation_strings": [
+        "Department of Computer Science and Operations Research Université de Montréal, Pavillon André-Aisenstadt, PO Box 6128 Centre-Ville STN Montréal, Quebec H3C 3J7, Canada",
+        "Department of Computer Science and Operations Research Université de Montréal, Pavillon André-Aisenstadt, PO Box 6128 Centre-Ville STN, Montréal, H3C 3J7, Quebec, Canada"
+      ],
+      "raw_author_name": "Yoshua Bengio",
+      "raw_orcid": null
+    },
+    {
+      "affiliations": [
+        {
+          "institution_ids": [
+            "https://openalex.org/I1291425158",
+            "https://openalex.org/I185261750"
+          ],
+          "raw_affiliation_string": "1] Google, 1600 Amphitheatre Parkway, Mountain View, California 94043, USA. [2] Department of Computer Science, University of Toronto, 6 King's College Road, Toronto, Ontario M5S 3G4, Canada"
+        },
+        {
+          "institution_ids": [
+            "https://openalex.org/I185261750"
+          ],
+          "raw_affiliation_string": "Department of Computer Science, University of Toronto, 6 King's College Road, Toronto, M5S 3G4, Ontario, Canada"
+        },
+        {
+          "institution_ids": [
+            "https://openalex.org/I1291425158"
+          ],
+          "raw_affiliation_string": "Google, 1600 Amphitheatre Parkway, Mountain View, 94043, California, USA"
+        }
+      ],
+      "author": {
+        "display_name": "Geoffrey E. Hinton",
+        "id": "https://openalex.org/A5108093963",
+        "observed_orcids": [],
+        "orcid": null
+      },
+      "author_position": "last",
+      "countries": [
+        "CA",
+        "US"
+      ],
+      "institutions": [
+        {
+          "country_code": "US",
+          "display_name": "Google (United States)",
+          "id": "https://openalex.org/I1291425158",
+          "lineage": [
+            "https://openalex.org/I1291425158",
+            "https://openalex.org/I4210128969"
+          ],
+          "ror": "https://ror.org/00njsd438",
+          "type": "company"
+        },
+        {
+          "country_code": "CA",
+          "display_name": "University of Toronto",
+          "id": "https://openalex.org/I185261750",
+          "lineage": [
+            "https://openalex.org/I185261750"
+          ],
+          "ror": "https://ror.org/03dbr7087",
+          "type": "education"
+        }
+      ],
+      "is_corresponding": false,
+      "raw_affiliation_strings": [
+        "1] Google, 1600 Amphitheatre Parkway, Mountain View, California 94043, USA. [2] Department of Computer Science, University of Toronto, 6 King's College Road, Toronto, Ontario M5S 3G4, Canada",
+        "Department of Computer Science, University of Toronto, 6 King's College Road, Toronto, M5S 3G4, Ontario, Canada",
+        "Google, 1600 Amphitheatre Parkway, Mountain View, 94043, California, USA"
+      ],
+      "raw_author_name": "Geoffrey Hinton",
+      "raw_orcid": null
+    }
+  ],
+  "best_oa_location": {
+    "id": "pmh:oai:HAL:hal-04206682v1",
+    "is_accepted": false,
+    "is_oa": true,
+    "is_published": false,
+    "landing_page_url": "https://hal.science/hal-04206682",
+    "license": "other-oa",
+    "license_id": "https://openalex.org/licenses/other-oa",
+    "pdf_url": null,
+    "raw_source_name": "Nature, 2015, 521 (7553), pp.436-444. &#x27E8;10.1038/nature14539&#x27E9;",
+    "raw_type": "info:eu-repo/semantics/article",
+    "source": {
+      "display_name": "HAL (Le Centre pour la Communication Scientifique Directe)",
+      "host_organization": "https://openalex.org/I1294671590",
+      "host_organization_lineage": [
+        "https://openalex.org/I1294671590"
+      ],
+      "host_organization_lineage_names": [],
+      "host_organization_name": "Centre National de la Recherche Scientifique",
+      "id": "https://openalex.org/S4306402512",
+      "is_core": false,
+      "is_in_doaj": false,
+      "is_oa": false,
+      "issn": null,
+      "issn_l": null,
+      "listed_in": [],
+      "type": "repository"
+    },
+    "version": "submittedVersion"
+  },
+  "cited_by_count": 85369,
+  "display_name": "Deep learning",
+  "doi": "https://doi.org/10.1038/nature14539",
+  "id": "https://openalex.org/W2919115771",
+  "locations": [
+    {
+      "id": "doi:10.1038/nature14539",
+      "is_accepted": true,
+      "is_oa": false,
+      "is_published": true,
+      "landing_page_url": "https://doi.org/10.1038/nature14539",
+      "license": null,
+      "license_id": null,
+      "pdf_url": null,
+      "raw_source_name": "Nature",
+      "raw_type": "journal-article",
+      "source": {
+        "display_name": "Nature",
+        "host_organization": "https://openalex.org/P4310319908",
+        "host_organization_lineage": [
+          "https://openalex.org/P4310319908",
+          "https://openalex.org/P4310319965"
+        ],
+        "host_organization_lineage_names": [
+          "Nature Portfolio",
+          "Springer Nature"
+        ],
+        "host_organization_name": "Nature Portfolio",
+        "id": "https://openalex.org/S137773608",
+        "is_core": true,
+        "is_in_doaj": false,
+        "is_oa": false,
+        "issn": [
+          "0028-0836",
+          "1476-4687"
+        ],
+        "issn_l": "0028-0836",
+        "listed_in": [
+          "cwts-core",
+          "doyens",
+          "erih-plus",
+          "jufo-3",
+          "ki-jl-3",
+          "medline",
+          "norway-2"
+        ],
+        "type": "journal"
+      },
+      "version": "publishedVersion"
+    },
+    {
+      "id": "pmid:26017442",
+      "is_accepted": true,
+      "is_oa": false,
+      "is_published": true,
+      "landing_page_url": "https://pubmed.ncbi.nlm.nih.gov/26017442",
+      "license": null,
+      "license_id": null,
+      "pdf_url": null,
+      "raw_source_name": "Nature",
+      "raw_type": "Journal Article",
+      "source": {
+        "display_name": "PubMed",
+        "host_organization": "https://openalex.org/I1299303238",
+        "host_organization_lineage": [
+          "https://openalex.org/I1299303238"
+        ],
+        "host_organization_lineage_names": [],
+        "host_organization_name": "National Institutes of Health",
+        "id": "https://openalex.org/S4306525036",
+        "is_core": false,
+        "is_in_doaj": false,
+        "is_oa": false,
+        "issn": null,
+        "issn_l": null,
+        "listed_in": [],
+        "type": "repository"
+      },
+      "version": "publishedVersion"
+    },
+    {
+      "id": "pmh:oai:HAL:hal-04206682v1",
+      "is_accepted": false,
+      "is_oa": true,
+      "is_published": false,
+      "landing_page_url": "https://hal.science/hal-04206682",
+      "license": "other-oa",
+      "license_id": "https://openalex.org/licenses/other-oa",
+      "pdf_url": null,
+      "raw_source_name": "Nature, 2015, 521 (7553), pp.436-444. &#x27E8;10.1038/nature14539&#x27E9;",
+      "raw_type": "info:eu-repo/semantics/article",
+      "source": {
+        "display_name": "HAL (Le Centre pour la Communication Scientifique Directe)",
+        "host_organization": "https://openalex.org/I1294671590",
+        "host_organization_lineage": [
+          "https://openalex.org/I1294671590"
+        ],
+        "host_organization_lineage_names": [],
+        "host_organization_name": "Centre National de la Recherche Scientifique",
+        "id": "https://openalex.org/S4306402512",
+        "is_core": false,
+        "is_in_doaj": false,
+        "is_oa": false,
+        "issn": null,
+        "issn_l": null,
+        "listed_in": [],
+        "type": "repository"
+      },
+      "version": "submittedVersion"
+    }
+  ],
+  "open_access": {
+    "any_repository_has_fulltext": true,
+    "is_oa": true,
+    "oa_status": "green",
+    "oa_url": "https://hal.science/hal-04206682"
+  },
+  "primary_location": {
+    "id": "doi:10.1038/nature14539",
+    "is_accepted": true,
+    "is_oa": false,
+    "is_published": true,
+    "landing_page_url": "https://doi.org/10.1038/nature14539",
+    "license": null,
+    "license_id": null,
+    "pdf_url": null,
+    "raw_source_name": "Nature",
+    "raw_type": "journal-article",
+    "source": {
+      "display_name": "Nature",
+      "host_organization": "https://openalex.org/P4310319908",
+      "host_organization_lineage": [
+        "https://openalex.org/P4310319908",
+        "https://openalex.org/P4310319965"
+      ],
+      "host_organization_lineage_names": [
+        "Nature Portfolio",
+        "Springer Nature"
+      ],
+      "host_organization_name": "Nature Portfolio",
+      "id": "https://openalex.org/S137773608",
+      "is_core": true,
+      "is_in_doaj": false,
+      "is_oa": false,
+      "issn": [
+        "0028-0836",
+        "1476-4687"
+      ],
+      "issn_l": "0028-0836",
+      "listed_in": [
+        "cwts-core",
+        "doyens",
+        "erih-plus",
+        "jufo-3",
+        "ki-jl-3",
+        "medline",
+        "norway-2"
+      ],
+      "type": "journal"
+    },
+    "version": "publishedVersion"
+  },
+  "publication_year": 2015,
+  "title": "Deep learning"
+}

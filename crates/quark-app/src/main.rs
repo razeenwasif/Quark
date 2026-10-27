@@ -13,6 +13,7 @@ mod app;
 mod assistant;
 mod books;
 mod chrome;
+mod cite;
 mod code;
 mod dialogs;
 mod grid;

@@ -265,6 +265,7 @@ impl App {
                     | Command::CommandPalette
                     | Command::ToggleTheme
                     | Command::OpenTexProject
+                    | Command::NewTexProject
             ) || matches!(cmd, Command::OpenRecent(_));
         };
         match cmd {
@@ -1744,6 +1745,14 @@ impl App {
                 }
             }
             Command::Save => self.save(false),
+            Command::NewTexProject => {
+                self.dialog = Some(Dialog::NewTex {
+                    templates: quark_tex::templates::templates(),
+                    chosen: 0,
+                    name: String::new(),
+                    parent: self.prefs.tex_parent.clone(),
+                });
+            }
             Command::OpenTexProject => {
                 let mut ask = rfd::FileDialog::new().set_title("Open a LaTeX project");
                 if let Some(dir) = self.prefs.tex_projects.first().and_then(|p| std::path::Path::new(p).parent()) {
@@ -2463,6 +2472,7 @@ impl App {
                 self.apply_op(DocOp::InsertBlankPage { at, size })
             }
             DialogResult::Ocr { pages, langs } => self.start_ocr(pages, langs),
+            DialogResult::NewTex { id, name, parent } => self.new_tex(&id, &name, &parent),
             DialogResult::Split { every, at } => {
                 let Some(tab) = self.tab() else { return };
                 let stem = tab.path().and_then(|p| p.file_stem()).map_or("Part".into(), |s| s.to_string_lossy().into_owned());

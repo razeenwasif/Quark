@@ -1,0 +1,2233 @@
+{
+  "group_by": [],
+  "meta": {
+    "cost_usd": 0.001,
+    "count": 3170,
+    "db_response_time_ms": 54,
+    "groups_count": null,
+    "page": 1,
+    "per_page": 3,
+    "x_query": {
+      "oql": "get works where full text has (rayleigh scattering sky colour)",
+      "oqo": {
+        "filter_rows": [
+          {
+            "column_id": "fulltext.search",
+            "operator": "has",
+            "value": "rayleigh scattering sky colour"
+          }
+        ],
+        "get_rows": "works"
+      },
+      "url": "/works?filter=fulltext.search:rayleigh scattering sky colour&per_page=3"
+    }
+  },
+  "results": [
+    {
+      "abstract_inverted_index": {
+        "Although": [
+          28
+        ],
+        "New": [
+          155
+        ],
+        "Rayleigh": [
+          0,
+          103,
+          119,
+          166,
+          170,
+          189
+        ],
+        "Scattering": [
+          110
+        ],
+        "The": [
+          95
+        ],
+        "These": [
+          69
+        ],
+        "This": [
+          134,
+          182
+        ],
+        "a": [
+          3
+        ],
+        "about": [
+          177
+        ],
+        "achieved": [
+          205
+        ],
+        "advances": [
+          197
+        ],
+        "aiding": [
+          17
+        ],
+        "also": [
+          115
+        ],
+        "and": [
+          12,
+          25,
+          60,
+          66,
+          78,
+          88,
+          121,
+          144,
+          169,
+          191
+        ],
+        "anisotropy": [
+          52
+        ],
+        "applied": [
+          163
+        ],
+        "approaches": [
+          156
+        ],
+        "approaches.": [
+          210
+        ],
+        "are": [
+          47,
+          160
+        ],
+        "associated": [
+          31,
+          63
+        ],
+        "background": [
+          108
+        ],
+        "be": [
+          76,
+          138,
+          150
+        ],
+        "because": [
+          49
+        ],
+        "been": [
+          204
+        ],
+        "being": [
+          162
+        ],
+        "both": [
+          165
+        ],
+        "by": [
+          152
+        ],
+        "can": [
+          137
+        ],
+        "cause": [
+          71
+        ],
+        "classical": [
+          186
+        ],
+        "collective": [
+          55
+        ],
+        "combustion": [
+          26
+        ],
+        "complex": [
+          22,
+          48,
+          178
+        ],
+        "conceptually": [
+          40
+        ],
+        "cross": [
+          99
+        ],
+        "density": [
+          131
+        ],
+        "depolarized": [
+          77
+        ],
+        "diagnostic": [
+          5
+        ],
+        "dipole": [
+          37
+        ],
+        "dominate": [
+          123
+        ],
+        "effects": [
+          70
+        ],
+        "electric": [
+          36
+        ],
+        "energy": [
+          90
+        ],
+        "enhance": [
+          141
+        ],
+        "extract": [
+          174
+        ],
+        "falls": [
+          116
+        ],
+        "features": [
+          43,
+          82
+        ],
+        "field": [
+          200
+        ],
+        "fields": [
+          24
+        ],
+        "fields.": [
+          181
+        ],
+        "filter": [
+          209
+        ],
+        "filtering": [
+          159
+        ],
+        "filtering.": [
+          154
+        ],
+        "flow": [
+          23,
+          142,
+          180,
+          199
+        ],
+        "for": [
+          7,
+          16
+        ],
+        "from": [
+          57,
+          111,
+          126
+        ],
+        "gas": [
+          179
+        ],
+        "gas.": [
+          94
+        ],
+        "gases": [
+          11
+        ],
+        "have": [
+          80,
+          203
+        ],
+        "high.": [
+          133
+        ],
+        "if": [
+          128
+        ],
+        "imaging": [
+          201
+        ],
+        "in": [
+          18,
+          198
+        ],
+        "induced": [
+          35
+        ],
+        "inelastic": [
+          61
+        ],
+        "information": [
+          176
+        ],
+        "interference.": [
+          109
+        ],
+        "internal": [
+          89
+        ],
+        "into": [
+          117
+        ],
+        "is": [
+          2,
+          13,
+          39,
+          132
+        ],
+        "it": [
+          148
+        ],
+        "makes": [
+          101
+        ],
+        "many": [
+          58
+        ],
+        "may": [
+          122,
+          149
+        ],
+        "measurements,": [
+          146
+        ],
+        "mechanism": [
+          30
+        ],
+        "molecular": [
+          102,
+          167
+        ],
+        "molecules": [
+          59,
+          127
+        ],
+        "molecules,": [
+          54
+        ],
+        "new": [
+          196,
+          208
+        ],
+        "now": [
+          161
+        ],
+        "of": [
+          10,
+          21,
+          44,
+          50,
+          53,
+          92,
+          188,
+          194
+        ],
+        "or": [
+          147
+        ],
+        "outlines": [
+          184
+        ],
+        "paper": [
+          183
+        ],
+        "particle": [
+          130,
+          135,
+          171
+        ],
+        "particles": [
+          114
+        ],
+        "particularly": [
+          14,
+          105
+        ],
+        "phenomena.": [
+          27
+        ],
+        "powerful": [
+          4
+        ],
+        "pressure,": [
+          86
+        ],
+        "properties": [
+          187
+        ],
+        "quantitative": [
+          175
+        ],
+        "radiation,": [
+          38
+        ],
+        "range": [
+          120
+        ],
+        "reflect": [
+          84
+        ],
+        "removed": [
+          151
+        ],
+        "reviews": [
+          192
+        ],
+        "rotational": [
+          65
+        ],
+        "scattered": [
+          73
+        ],
+        "scattering": [
+          1,
+          46,
+          56,
+          62,
+          98,
+          104,
+          125,
+          136,
+          168,
+          172,
+          190
+        ],
+        "scattering,": [
+          34
+        ],
+        "section": [
+          100
+        ],
+        "signal": [
+          74
+        ],
+        "small": [
+          97,
+          113
+        ],
+        "some": [
+          193
+        ],
+        "spectral": [
+          81,
+          153,
+          158
+        ],
+        "states": [
+          91
+        ],
+        "straightforward,": [
+          41
+        ],
+        "study": [
+          9
+        ],
+        "susceptible": [
+          106
+        ],
+        "temperature": [
+          87
+        ],
+        "that": [
+          83,
+          202
+        ],
+        "the": [
+          8,
+          19,
+          29,
+          33,
+          42,
+          45,
+          51,
+          72,
+          85,
+          93,
+          118,
+          124,
+          129,
+          185,
+          195,
+          207
+        ],
+        "to": [
+          75,
+          79,
+          107,
+          140,
+          157,
+          164,
+          173
+        ],
+        "tool": [
+          6
+        ],
+        "transitions.": [
+          68
+        ],
+        "understanding": [
+          20
+        ],
+        "used": [
+          139
+        ],
+        "useful": [
+          15
+        ],
+        "using": [
+          206
+        ],
+        "velocity": [
+          145
+        ],
+        "very": [
+          96,
+          112
+        ],
+        "vibrational": [
+          67
+        ],
+        "visualization": [
+          143
+        ],
+        "with": [
+          32,
+          64
+        ]
+      },
+      "authorships": [
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I20089843"
+              ],
+              "raw_affiliation_string": "Princeton University, Department of Mechanical and Aerospace Engineering, Princeton, NJ 08544, USA"
+            },
+            {
+              "institution_ids": [
+                "https://openalex.org/I20089843"
+              ],
+              "raw_affiliation_string": "Princeton University Department of Mechanical and Aerospace Engineering Princeton, NJ 08544, USA"
+            }
+          ],
+          "author": {
+            "display_name": "Richard B. Miles",
+            "id": "https://openalex.org/A5103080298",
+            "observed_orcids": [
+              "https://orcid.org/0000-0002-6774-224X"
+            ],
+            "orcid": "https://orcid.org/0000-0002-6774-224X"
+          },
+          "author_position": "first",
+          "countries": [
+            "US"
+          ],
+          "institutions": [
+            {
+              "country_code": "US",
+              "display_name": "Princeton University",
+              "id": "https://openalex.org/I20089843",
+              "lineage": [
+                "https://openalex.org/I20089843"
+              ],
+              "ror": "https://ror.org/00hx57361",
+              "type": "education"
+            }
+          ],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [
+            "Princeton University, Department of Mechanical and Aerospace Engineering, Princeton, NJ 08544, USA",
+            "Princeton University Department of Mechanical and Aerospace Engineering Princeton, NJ 08544, USA"
+          ],
+          "raw_author_name": "Richard B Miles",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I20089843"
+              ],
+              "raw_affiliation_string": "Princeton University, Department of Mechanical and Aerospace Engineering, Princeton, NJ 08544, USA"
+            },
+            {
+              "institution_ids": [
+                "https://openalex.org/I52357470"
+              ],
+              "raw_affiliation_string": "The Ohio State University, Departments of Mechanical Engineering and Chemistry, Columbus, OH 43210, USA"
+            },
+            {
+              "institution_ids": [
+                "https://openalex.org/I52357470"
+              ],
+              "raw_affiliation_string": "The Ohio State University,#N#Departments of Mechanical Engineering and Chemistry,#N#Columbus, OH 43210, USA"
+            }
+          ],
+          "author": {
+            "display_name": "Walter R. Lempert",
+            "id": "https://openalex.org/A5111644114",
+            "observed_orcids": [],
+            "orcid": null
+          },
+          "author_position": "middle",
+          "countries": [
+            "US"
+          ],
+          "institutions": [
+            {
+              "country_code": "US",
+              "display_name": "Princeton University",
+              "id": "https://openalex.org/I20089843",
+              "lineage": [
+                "https://openalex.org/I20089843"
+              ],
+              "ror": "https://ror.org/00hx57361",
+              "type": "education"
+            },
+            {
+              "country_code": "US",
+              "display_name": "The Ohio State University",
+              "id": "https://openalex.org/I52357470",
+              "lineage": [
+                "https://openalex.org/I52357470"
+              ],
+              "ror": "https://ror.org/00rs6vg23",
+              "type": "education"
+            }
+          ],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [
+            "Princeton University, Department of Mechanical and Aerospace Engineering, Princeton, NJ 08544, USA",
+            "The Ohio State University, Departments of Mechanical Engineering and Chemistry, Columbus, OH 43210, USA",
+            "The Ohio State University,#N#Departments of Mechanical Engineering and Chemistry,#N#Columbus, OH 43210, USA"
+          ],
+          "raw_author_name": "Walter R Lempert",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I20089843"
+              ],
+              "raw_affiliation_string": "Princeton University, Department of Mechanical and Aerospace Engineering, Princeton, NJ 08544, USA"
+            },
+            {
+              "institution_ids": [
+                "https://openalex.org/I79576946"
+              ],
+              "raw_affiliation_string": "University of Pennsylvania, Pennsylvania Muscle Institute, The School of Medicine, D700 Richards Building, 3700 Hamilton Walk, Philadelphia, PA 19104-6083, USA"
+            },
+            {
+              "institution_ids": [
+                "https://openalex.org/I20089843"
+              ],
+              "raw_affiliation_string": "Princeton University, Department of Mechanical and Aerospace Engineering, Princeton,  NJ 08544, USA"
+            },
+            {
+              "institution_ids": [
+                "https://openalex.org/I79576946"
+              ],
+              "raw_affiliation_string": "University of Pennsylvania, Pennsylvania Muscle Institute,#N#The School of Medicine, #N#D700 Richards Building, 3700 Hamilton Walk,#N#Philadelphia, PA 19104-6083, USA"
+            }
+          ],
+          "author": {
+            "display_name": "Joseph N. Forkey",
+            "id": "https://openalex.org/A5012100480",
+            "observed_orcids": [],
+            "orcid": null
+          },
+          "author_position": "last",
+          "countries": [
+            "US"
+          ],
+          "institutions": [
+            {
+              "country_code": "US",
+              "display_name": "Princeton University",
+              "id": "https://openalex.org/I20089843",
+              "lineage": [
+                "https://openalex.org/I20089843"
+              ],
+              "ror": "https://ror.org/00hx57361",
+              "type": "education"
+            },
+            {
+              "country_code": "US",
+              "display_name": "University of Pennsylvania",
+              "id": "https://openalex.org/I79576946",
+              "lineage": [
+                "https://openalex.org/I79576946"
+              ],
+              "ror": "https://ror.org/00b30xv10",
+              "type": "education"
+            }
+          ],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [
+            "Princeton University, Department of Mechanical and Aerospace Engineering, Princeton, NJ 08544, USA",
+            "University of Pennsylvania, Pennsylvania Muscle Institute, The School of Medicine, D700 Richards Building, 3700 Hamilton Walk, Philadelphia, PA 19104-6083, USA",
+            "Princeton University, Department of Mechanical and Aerospace Engineering, Princeton,  NJ 08544, USA",
+            "University of Pennsylvania, Pennsylvania Muscle Institute,#N#The School of Medicine, #N#D700 Richards Building, 3700 Hamilton Walk,#N#Philadelphia, PA 19104-6083, USA"
+          ],
+          "raw_author_name": "Joseph N Forkey",
+          "raw_orcid": null
+        }
+      ],
+      "best_oa_location": {
+        "id": "doi:10.1088/0957-0233/12/5/201",
+        "is_accepted": true,
+        "is_oa": true,
+        "is_published": true,
+        "landing_page_url": "https://doi.org/10.1088/0957-0233/12/5/201",
+        "license": null,
+        "license_id": null,
+        "pdf_url": "https://iopscience.iop.org/article/10.1088/0957-0233/12/5/201/pdf",
+        "raw_source_name": "Measurement Science and Technology",
+        "raw_type": "journal-article",
+        "source": {
+          "display_name": "Measurement Science and Technology",
+          "host_organization": "https://openalex.org/P4310320083",
+          "host_organization_lineage": [
+            "https://openalex.org/P4310320083",
+            "https://openalex.org/P4310311669"
+          ],
+          "host_organization_lineage_names": [
+            "IOP Publishing",
+            "Institute of Physics"
+          ],
+          "host_organization_name": "IOP Publishing",
+          "id": "https://openalex.org/S109302362",
+          "is_core": true,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": [
+            "0957-0233",
+            "1361-6501"
+          ],
+          "issn_l": "0957-0233",
+          "listed_in": [
+            "cwts-core",
+            "jufo-2",
+            "norway-1"
+          ],
+          "type": "journal"
+        },
+        "version": "publishedVersion"
+      },
+      "cited_by_count": 590,
+      "display_name": "Laser Rayleigh scattering",
+      "doi": "https://doi.org/10.1088/0957-0233/12/5/201",
+      "id": "https://openalex.org/W2123918241",
+      "locations": [
+        {
+          "id": "doi:10.1088/0957-0233/12/5/201",
+          "is_accepted": true,
+          "is_oa": true,
+          "is_published": true,
+          "landing_page_url": "https://doi.org/10.1088/0957-0233/12/5/201",
+          "license": null,
+          "license_id": null,
+          "pdf_url": "https://iopscience.iop.org/article/10.1088/0957-0233/12/5/201/pdf",
+          "raw_source_name": "Measurement Science and Technology",
+          "raw_type": "journal-article",
+          "source": {
+            "display_name": "Measurement Science and Technology",
+            "host_organization": "https://openalex.org/P4310320083",
+            "host_organization_lineage": [
+              "https://openalex.org/P4310320083",
+              "https://openalex.org/P4310311669"
+            ],
+            "host_organization_lineage_names": [
+              "IOP Publishing",
+              "Institute of Physics"
+            ],
+            "host_organization_name": "IOP Publishing",
+            "id": "https://openalex.org/S109302362",
+            "is_core": true,
+            "is_in_doaj": false,
+            "is_oa": false,
+            "issn": [
+              "0957-0233",
+              "1361-6501"
+            ],
+            "issn_l": "0957-0233",
+            "listed_in": [
+              "cwts-core",
+              "jufo-2",
+              "norway-1"
+            ],
+            "type": "journal"
+          },
+          "version": "publishedVersion"
+        }
+      ],
+      "open_access": {
+        "any_repository_has_fulltext": false,
+        "is_oa": true,
+        "oa_status": "bronze",
+        "oa_url": "https://iopscience.iop.org/article/10.1088/0957-0233/12/5/201/pdf"
+      },
+      "primary_location": {
+        "id": "doi:10.1088/0957-0233/12/5/201",
+        "is_accepted": true,
+        "is_oa": true,
+        "is_published": true,
+        "landing_page_url": "https://doi.org/10.1088/0957-0233/12/5/201",
+        "license": null,
+        "license_id": null,
+        "pdf_url": "https://iopscience.iop.org/article/10.1088/0957-0233/12/5/201/pdf",
+        "raw_source_name": "Measurement Science and Technology",
+        "raw_type": "journal-article",
+        "source": {
+          "display_name": "Measurement Science and Technology",
+          "host_organization": "https://openalex.org/P4310320083",
+          "host_organization_lineage": [
+            "https://openalex.org/P4310320083",
+            "https://openalex.org/P4310311669"
+          ],
+          "host_organization_lineage_names": [
+            "IOP Publishing",
+            "Institute of Physics"
+          ],
+          "host_organization_name": "IOP Publishing",
+          "id": "https://openalex.org/S109302362",
+          "is_core": true,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": [
+            "0957-0233",
+            "1361-6501"
+          ],
+          "issn_l": "0957-0233",
+          "listed_in": [
+            "cwts-core",
+            "jufo-2",
+            "norway-1"
+          ],
+          "type": "journal"
+        },
+        "version": "publishedVersion"
+      },
+      "publication_year": 2001,
+      "title": "Laser Rayleigh scattering"
+    },
+    {
+      "abstract_inverted_index": {
+        "(that": [
+          379
+        ],
+        "Abstract": [
+          0
+        ],
+        "An": [
+          318
+        ],
+        "As": [
+          478
+        ],
+        "Bancroft.": [
+          336
+        ],
+        "Buchanan,": [
+          295
+        ],
+        "Bunge’s": [
+          353
+        ],
+        "Cabannes": [
+          35
+        ],
+        "D.": [
+          335
+        ],
+        "During": [
+          412
+        ],
+        "From": [
+          337
+        ],
+        "In": [
+          214
+        ],
+        "It": [
+          80,
+          438
+        ],
+        "J.": [
+          293
+        ],
+        "Kayser": [
+          351
+        ],
+        "Lord": [
+          38,
+          185
+        ],
+        "On": [
+          167,
+          282
+        ],
+        "Prof.": [
+          333
+        ],
+        "Rayleigh": [
+          39
+        ],
+        "Rayleigh:": [
+          186
+        ],
+        "The": [
+          1,
+          138,
+          254
+        ],
+        "Under": [
+          245
+        ],
+        "W.": [
+          334
+        ],
+        "Y.": [
+          294
+        ],
+        "a": [
+          26,
+          132,
+          144,
+          163,
+          207,
+          338,
+          413,
+          479,
+          485
+        ],
+        "above": [
+          434
+        ],
+        "above,": [
+          123
+        ],
+        "absorption,": [
+          194,
+          393
+        ],
+        "account": [
+          348
+        ],
+        "adequate": [
+          222
+        ],
+        "admirable": [
+          319
+        ],
+        "agreement": [
+          75
+        ],
+        "all": [
+          378
+        ],
+        "also": [
+          475
+        ],
+        "an": [
+          180,
+          314,
+          422,
+          446
+        ],
+        "and": [
+          12,
+          36,
+          48,
+          120,
+          345,
+          352,
+          471,
+          488
+        ],
+        "another": [
+          98
+        ],
+        "any": [
+          371
+        ],
+        "apart": [
+          381
+        ],
+        "appear": [
+          357
+        ],
+        "appears": [
+          160
+        ],
+        "as": [
+          129,
+          148,
+          182,
+          292,
+          368,
+          454
+        ],
+        "at": [
+          140,
+          377
+        ],
+        "atmosphere": [
+          21,
+          61
+        ],
+        "author": [
+          419
+        ],
+        "authority": [
+          181
+        ],
+        "back": [
+          241
+        ],
+        "background": [
+          135
+        ],
+        "basis": [
+          29
+        ],
+        "be": [
+          162,
+          252,
+          375,
+          500
+        ],
+        "bear": [
+          189
+        ],
+        "been": [
+          329
+        ],
+        "before": [
+          210
+        ],
+        "being": [
+          126,
+          405
+        ],
+        "black": [
+          134
+        ],
+        "blue": [
+          257,
+          275
+        ],
+        "brilliant": [
+          32
+        ],
+        "but": [
+          227,
+          271
+        ],
+        "by": [
+          16,
+          30,
+          45,
+          49,
+          94,
+          110,
+          118,
+          177,
+          280,
+          332
+        ],
+        "calculated": [
+          78
+        ],
+        "calculation": [
+          487
+        ],
+        "cannot": [
+          200,
+          251
+        ],
+        "case": [
+          458
+        ],
+        "circumstances,": [
+          247
+        ],
+        "clear": [
+          114
+        ],
+        "clear,": [
+          232
+        ],
+        "close": [
+          74
+        ],
+        "colour": [
+          13,
+          108,
+          197,
+          250,
+          268,
+          387,
+          461
+        ],
+        "colour,": [
+          226
+        ],
+        "colour.": [
+          477
+        ],
+        "contrary": [
+          316
+        ],
+        "convenient": [
+          343
+        ],
+        "course,": [
+          221
+        ],
+        "dark": [
+          256
+        ],
+        "deep": [
+          260
+        ],
+        "depth": [
+          125,
+          209,
+          218
+        ],
+        "depths": [
+          401
+        ],
+        "descriptions": [
+          311
+        ],
+        "detailed": [
+          310
+        ],
+        "determines": [
+          467
+        ],
+        "develop": [
+          224
+        ],
+        "different": [
+          448
+        ],
+        "diffraction": [
+          15,
+          96,
+          466
+        ],
+        "discussion,": [
+          484
+        ],
+        "divergence": [
+          164
+        ],
+        "do": [
+          265
+        ],
+        "due": [
+          391,
+          406
+        ],
+        "dust-free": [
+          46
+        ],
+        "effect": [
+          373
+        ],
+        "eminent": [
+          179
+        ],
+        "entirely": [
+          315,
+          436,
+          447
+        ],
+        "established": [
+          24
+        ],
+        "even": [
+          149
+        ],
+        "exhibited": [
+          109
+        ],
+        "expedition,": [
+          299
+        ],
+        "experimental": [
+          28,
+          489
+        ],
+        "explained": [
+          376
+        ],
+        "expressed": [
+          176
+        ],
+        "eye.": [
+          213
+        ],
+        "familiar": [
+          287
+        ],
+        "far": [
+          367
+        ],
+        "firm": [
+          27
+        ],
+        "following": [
+          174
+        ],
+        "for": [
+          136,
+          306
+        ],
+        "from": [
+          122,
+          346,
+          382,
+          399
+        ],
+        "gases,": [
+          47
+        ],
+        "general": [
+          360
+        ],
+        "given": [
+          349
+        ],
+        "great": [
+          101,
+          128,
+          473
+        ],
+        "had": [
+          302,
+          421
+        ],
+        "hand,": [
+          170,
+          285
+        ],
+        "has": [
+          262,
+          328,
+          420
+        ],
+        "have": [
+          70,
+          172,
+          301,
+          308
+        ],
+        "higher": [
+          57
+        ],
+        "if": [
+          228
+        ],
+        "illumined": [
+          117
+        ],
+        "in": [
+          62,
+          73,
+          97,
+          143,
+          190,
+          350,
+          410,
+          441,
+          451,
+          455,
+          472,
+          497
+        ],
+        "inadequate.": [
+          437
+        ],
+        "indicated": [
+          433
+        ],
+        "intensity": [
+          493
+        ],
+        "is": [
+          22,
+          81,
+          142,
+          231,
+          234,
+          272,
+          364,
+          370,
+          390,
+          435,
+          439
+        ],
+        "is,": [
+          106,
+          219,
+          380
+        ],
+        "it": [
+          355
+        ],
+        "it.": [
+          411
+        ],
+        "its": [
+          10,
+          476
+        ],
+        "itself": [
+          202
+        ],
+        "large": [
+          111
+        ],
+        "late": [
+          184
+        ],
+        "levels": [
+          58
+        ],
+        "light": [
+          5,
+          44,
+          205,
+          240,
+          398
+        ],
+        "light)": [
+          385
+        ],
+        "liquid": [
+          404
+        ],
+        "literature": [
+          323
+        ],
+        "luminosity": [
+          470
+        ],
+        "making": [
+          425
+        ],
+        "manifest": [
+          201
+        ],
+        "masses": [
+          112
+        ],
+        "matter": [
+          409
+        ],
+        "measure": [
+          474
+        ],
+        "measurements": [
+          51
+        ],
+        "mind": [
+          191
+        ],
+        "molecular": [
+          95,
+          465,
+          495
+        ],
+        "molecules": [
+          18
+        ],
+        "much-admired": [
+          255
+        ],
+        "must": [
+          188
+        ],
+        "natural": [
+          102
+        ],
+        "necessary": [
+          480
+        ],
+        "nothing": [
+          236,
+          263
+        ],
+        "now": [
+          23
+        ],
+        "observation.": [
+          137
+        ],
+        "observations": [
+          427,
+          490
+        ],
+        "observed": [
+          469
+        ],
+        "observer.": [
+          244
+        ],
+        "observers": [
+          286
+        ],
+        "ocean": [
+          216,
+          415
+        ],
+        "of": [
+          6,
+          19,
+          34,
+          37,
+          43,
+          52,
+          55,
+          59,
+          66,
+          84,
+          99,
+          113,
+          153,
+          156,
+          165,
+          198,
+          220,
+          258,
+          269,
+          276,
+          296,
+          321,
+          340,
+          362,
+          388,
+          396,
+          402,
+          424,
+          459,
+          462,
+          491,
+          494
+        ],
+        "often": [
+          235
+        ],
+        "on": [
+          25,
+          40,
+          150,
+          324
+        ],
+        "one": [
+          169
+        ],
+        "opinion": [
+          363
+        ],
+        "opinion.": [
+          166
+        ],
+        "opportunities": [
+          305
+        ],
+        "opportunity": [
+          423
+        ],
+        "optical": [
+          103
+        ],
+        "or": [
+          195
+        ],
+        "origin": [
+          11
+        ],
+        "other": [
+          284
+        ],
+        "out": [
+          90
+        ],
+        "owes": [
+          9
+        ],
+        "paper": [
+          87,
+          443
+        ],
+        "parallel": [
+          457
+        ],
+        "part": [
+          92
+        ],
+        "peculiar": [
+          146
+        ],
+        "perfectly": [
+          133
+        ],
+        "perusal": [
+          339
+        ],
+        "phenomena,": [
+          104
+        ],
+        "phenomenon": [
+          158
+        ],
+        "phenomenon,": [
+          453
+        ],
+        "played": [
+          93
+        ],
+        "point": [
+          89
+        ],
+        "position,": [
+          147
+        ],
+        "preliminary": [
+          481
+        ],
+        "present": [
+          86,
+          141,
+          418
+        ],
+        "presented.": [
+          501
+        ],
+        "proper": [
+          249
+        ],
+        "proper,": [
+          196
+        ],
+        "proposed": [
+          440
+        ],
+        "provide": [
+          131
+        ],
+        "précis": [
+          320
+        ],
+        "published": [
+          309,
+          331
+        ],
+        "purpose": [
+          83
+        ],
+        "question": [
+          152
+        ],
+        "reaching": [
+          211
+        ],
+        "real": [
+          372
+        ],
+        "reality": [
+          155
+        ],
+        "recent": [
+          414
+        ],
+        "recently": [
+          330
+        ],
+        "reflected": [
+          383
+        ],
+        "reflection.”": [
+          281
+        ],
+        "region": [
+          65
+        ],
+        "results": [
+          72
+        ],
+        "return": [
+          395
+        ],
+        "scattering": [
+          42,
+          496
+        ],
+        "sea": [
+          261
+        ],
+        "sea,": [
+          290
+        ],
+        "seen": [
+          279
+        ],
+        "seen.": [
+          253
+        ],
+        "send": [
+          238
+        ],
+        "show": [
+          429
+        ],
+        "simply": [
+          273
+        ],
+        "sky": [
+          8,
+          278,
+          384
+        ],
+        "sky,": [
+          464
+        ],
+        "so": [
+          127,
+          178,
+          366
+        ],
+        "some": [
+          426
+        ],
+        "somewhat": [
+          145
+        ],
+        "spectrum,": [
+          68
+        ],
+        "study,": [
+          307
+        ],
+        "subject": [
+          139,
+          327
+        ],
+        "such": [
+          291
+        ],
+        "sufficient": [
+          208
+        ],
+        "summary,": [
+          344
+        ],
+        "sunshine": [
+          119
+        ],
+        "support": [
+          313
+        ],
+        "suspended": [
+          408
+        ],
+        "that": [
+          3,
+          105,
+          192,
+          358,
+          430,
+          450
+        ],
+        "that,": [
+          365
+        ],
+        "the": [
+          4,
+          7,
+          17,
+          20,
+          31,
+          41,
+          50,
+          53,
+          56,
+          60,
+          63,
+          67,
+          77,
+          82,
+          85,
+          91,
+          100,
+          107,
+          124,
+          151,
+          154,
+          157,
+          168,
+          173,
+          183,
+          193,
+          204,
+          212,
+          215,
+          217,
+          225,
+          229,
+          239,
+          243,
+          248,
+          259,
+          267,
+          274,
+          277,
+          283,
+          289,
+          297,
+          322,
+          325,
+          347,
+          359,
+          386,
+          394,
+          397,
+          400,
+          403,
+          417,
+          431,
+          456,
+          460,
+          463,
+          468,
+          483,
+          492
+        ],
+        "theoretical": [
+          486
+        ],
+        "theory": [
+          2
+        ],
+        "there": [
+          159,
+          233,
+          369
+        ],
+        "these": [
+          246
+        ],
+        "this": [
+          341,
+          442,
+          452
+        ],
+        "to": [
+          14,
+          88,
+          130,
+          161,
+          223,
+          237,
+          242,
+          264,
+          374,
+          392,
+          407,
+          444,
+          482
+        ],
+        "transparency": [
+          54
+        ],
+        "traverses": [
+          206
+        ],
+        "trend": [
+          361
+        ],
+        "unless": [
+          203
+        ],
+        "urge": [
+          445
+        ],
+        "values.": [
+          79
+        ],
+        "very": [
+          303,
+          342
+        ],
+        "view": [
+          175,
+          432
+        ],
+        "view,": [
+          449
+        ],
+        "view.": [
+          317
+        ],
+        "viewed": [
+          121
+        ],
+        "visual": [
+          64
+        ],
+        "voyage,": [
+          416
+        ],
+        "water": [
+          115,
+          199,
+          230,
+          389,
+          498
+        ],
+        "water,": [
+          270
+        ],
+        "we": [
+          171
+        ],
+        "when": [
+          116
+        ],
+        "which": [
+          69,
+          312,
+          428
+        ],
+        "who": [
+          300
+        ],
+        "whole": [
+          326
+        ],
+        "wide": [
+          304
+        ],
+        "will": [
+          499
+        ],
+        "with": [
+          76,
+          266,
+          288
+        ],
+        "work": [
+          33
+        ],
+        "would": [
+          356
+        ],
+        "yielded": [
+          71
+        ],
+        "‘Handbuch,’": [
+          354
+        ],
+        "“Challenger”": [
+          298
+        ],
+        "“We": [
+          187
+        ]
+      },
+      "authorships": [
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I106542073"
+              ],
+              "raw_affiliation_string": "Palit Professor of Physics in the Calcutta University"
+            }
+          ],
+          "author": {
+            "display_name": "Chandrasekhara Venkata Raman",
+            "id": "https://openalex.org/A5108634248",
+            "observed_orcids": [],
+            "orcid": null
+          },
+          "author_position": "first",
+          "countries": [
+            "IN"
+          ],
+          "institutions": [
+            {
+              "country_code": "IN",
+              "display_name": "University of Calcutta",
+              "id": "https://openalex.org/I106542073",
+              "lineage": [
+                "https://openalex.org/I106542073"
+              ],
+              "ror": "https://ror.org/01e7v7w47",
+              "type": "education"
+            }
+          ],
+          "is_corresponding": true,
+          "raw_affiliation_strings": [
+            "Palit Professor of Physics in the Calcutta University"
+          ],
+          "raw_author_name": "Chandrasekhara Venkata Raman",
+          "raw_orcid": null
+        }
+      ],
+      "best_oa_location": {
+        "id": "doi:10.1098/rspa.1922.0025",
+        "is_accepted": true,
+        "is_oa": true,
+        "is_published": true,
+        "landing_page_url": "https://doi.org/10.1098/rspa.1922.0025",
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "raw_source_name": "Proceedings of the Royal Society of London. Series A, Containing Papers of a Mathematical and Physical Character",
+        "raw_type": "journal-article",
+        "source": {
+          "display_name": "Proceedings of the Royal Society of London Series A Containing Papers of a Mathematical and Physical Character",
+          "host_organization": "https://openalex.org/P4310319787",
+          "host_organization_lineage": [
+            "https://openalex.org/P4310319787"
+          ],
+          "host_organization_lineage_names": [
+            "Royal Society"
+          ],
+          "host_organization_name": "Royal Society",
+          "id": "https://openalex.org/S4210188322",
+          "is_core": false,
+          "is_in_doaj": false,
+          "is_oa": true,
+          "issn": [
+            "0950-1207",
+            "2053-9150"
+          ],
+          "issn_l": "0950-1207",
+          "listed_in": [],
+          "type": "journal"
+        },
+        "version": "publishedVersion"
+      },
+      "cited_by_count": 51,
+      "display_name": "On the molecular scattering of light in water and the colour of the sea",
+      "doi": "https://doi.org/10.1098/rspa.1922.0025",
+      "id": "https://openalex.org/W2088920629",
+      "locations": [
+        {
+          "id": "doi:10.1098/rspa.1922.0025",
+          "is_accepted": true,
+          "is_oa": true,
+          "is_published": true,
+          "landing_page_url": "https://doi.org/10.1098/rspa.1922.0025",
+          "license": null,
+          "license_id": null,
+          "pdf_url": null,
+          "raw_source_name": "Proceedings of the Royal Society of London. Series A, Containing Papers of a Mathematical and Physical Character",
+          "raw_type": "journal-article",
+          "source": {
+            "display_name": "Proceedings of the Royal Society of London Series A Containing Papers of a Mathematical and Physical Character",
+            "host_organization": "https://openalex.org/P4310319787",
+            "host_organization_lineage": [
+              "https://openalex.org/P4310319787"
+            ],
+            "host_organization_lineage_names": [
+              "Royal Society"
+            ],
+            "host_organization_name": "Royal Society",
+            "id": "https://openalex.org/S4210188322",
+            "is_core": false,
+            "is_in_doaj": false,
+            "is_oa": true,
+            "issn": [
+              "0950-1207",
+              "2053-9150"
+            ],
+            "issn_l": "0950-1207",
+            "listed_in": [],
+            "type": "journal"
+          },
+          "version": "publishedVersion"
+        }
+      ],
+      "open_access": {
+        "any_repository_has_fulltext": false,
+        "is_oa": true,
+        "oa_status": "diamond",
+        "oa_url": "https://doi.org/10.1098/rspa.1922.0025"
+      },
+      "primary_location": {
+        "id": "doi:10.1098/rspa.1922.0025",
+        "is_accepted": true,
+        "is_oa": true,
+        "is_published": true,
+        "landing_page_url": "https://doi.org/10.1098/rspa.1922.0025",
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "raw_source_name": "Proceedings of the Royal Society of London. Series A, Containing Papers of a Mathematical and Physical Character",
+        "raw_type": "journal-article",
+        "source": {
+          "display_name": "Proceedings of the Royal Society of London Series A Containing Papers of a Mathematical and Physical Character",
+          "host_organization": "https://openalex.org/P4310319787",
+          "host_organization_lineage": [
+            "https://openalex.org/P4310319787"
+          ],
+          "host_organization_lineage_names": [
+            "Royal Society"
+          ],
+          "host_organization_name": "Royal Society",
+          "id": "https://openalex.org/S4210188322",
+          "is_core": false,
+          "is_in_doaj": false,
+          "is_oa": true,
+          "issn": [
+            "0950-1207",
+            "2053-9150"
+          ],
+          "issn_l": "0950-1207",
+          "listed_in": [],
+          "type": "journal"
+        },
+        "version": "publishedVersion"
+      },
+      "publication_year": 1922,
+      "title": "On the molecular scattering of light in water and the colour of the sea"
+    },
+    {
+      "abstract_inverted_index": {
+        "A": [
+          22
+        ],
+        "Features": [
+          8
+        ],
+        "Rayleigh": [
+          10
+        ],
+        "The": [
+          0
+        ],
+        "also": [
+          28
+        ],
+        "appears": [
+          6
+        ],
+        "are": [
+          12,
+          15
+        ],
+        "as": [
+          14
+        ],
+        "author": [
+          1
+        ],
+        "blue.": [
+          7
+        ],
+        "briefly.": [
+          30
+        ],
+        "classroom": [
+          25
+        ],
+        "considers": [
+          2
+        ],
+        "demonstration": [
+          23
+        ],
+        "features": [
+          16
+        ],
+        "for": [
+          24
+        ],
+        "human": [
+          19
+        ],
+        "is": [
+          27
+        ],
+        "mentioned": [
+          13,
+          29
+        ],
+        "of": [
+          9,
+          17
+        ],
+        "scattering": [
+          11
+        ],
+        "sky": [
+          5
+        ],
+        "system.": [
+          21
+        ],
+        "the": [
+          4,
+          18
+        ],
+        "use": [
+          26
+        ],
+        "visual": [
+          20
+        ],
+        "why": [
+          3
+        ]
+      },
+      "authorships": [
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I140172145"
+              ],
+              "raw_affiliation_string": "Unit 1157, University of Connecticut, Storrs, CT, USA"
+            },
+            {
+              "institution_ids": [
+                "https://openalex.org/I140172145"
+              ],
+              "raw_affiliation_string": "[Connecticut Univ., Storrs, CT, USA]"
+            }
+          ],
+          "author": {
+            "display_name": "Rajeev Bansal",
+            "id": "https://openalex.org/A5060368919",
+            "observed_orcids": [
+              "https://orcid.org/0000-0002-8282-741X"
+            ],
+            "orcid": "https://orcid.org/0000-0002-8282-741X"
+          },
+          "author_position": "first",
+          "countries": [
+            "US"
+          ],
+          "institutions": [
+            {
+              "country_code": "US",
+              "display_name": "University of Connecticut",
+              "id": "https://openalex.org/I140172145",
+              "lineage": [
+                "https://openalex.org/I140172145"
+              ],
+              "ror": "https://ror.org/02der9h97",
+              "type": "education"
+            }
+          ],
+          "is_corresponding": true,
+          "raw_affiliation_strings": [
+            "Unit 1157, University of Connecticut, Storrs, CT, USA",
+            "[Connecticut Univ., Storrs, CT, USA]"
+          ],
+          "raw_author_name": "R. Bansal",
+          "raw_orcid": null
+        }
+      ],
+      "best_oa_location": null,
+      "cited_by_count": 4,
+      "display_name": "Roses are red, violets are blue... [sky colour",
+      "doi": "https://doi.org/10.1109/map.2005.1589901",
+      "id": "https://openalex.org/W1968340720",
+      "locations": [
+        {
+          "id": "doi:10.1109/map.2005.1589901",
+          "is_accepted": true,
+          "is_oa": false,
+          "is_published": true,
+          "landing_page_url": "https://doi.org/10.1109/map.2005.1589901",
+          "license": null,
+          "license_id": null,
+          "pdf_url": null,
+          "raw_source_name": "IEEE Antennas and Propagation Magazine",
+          "raw_type": "journal-article",
+          "source": {
+            "display_name": "IEEE Antennas and Propagation Magazine",
+            "host_organization": "https://openalex.org/P4310319808",
+            "host_organization_lineage": [
+              "https://openalex.org/P4310319808"
+            ],
+            "host_organization_lineage_names": [
+              "Institute of Electrical and Electronics Engineers"
+            ],
+            "host_organization_name": "Institute of Electrical and Electronics Engineers",
+            "id": "https://openalex.org/S201045332",
+            "is_core": true,
+            "is_in_doaj": false,
+            "is_oa": false,
+            "issn": [
+              "1045-9243",
+              "1558-4143"
+            ],
+            "issn_l": "1045-9243",
+            "listed_in": [
+              "cwts-core",
+              "jufo-2",
+              "norway-1"
+            ],
+            "type": "journal"
+          },
+          "version": "publishedVersion"
+        }
+      ],
+      "open_access": {
+        "any_repository_has_fulltext": false,
+        "is_oa": false,
+        "oa_status": "closed",
+        "oa_url": null
+      },
+      "primary_location": {
+        "id": "doi:10.1109/map.2005.1589901",
+        "is_accepted": true,
+        "is_oa": false,
+        "is_published": true,
+        "landing_page_url": "https://doi.org/10.1109/map.2005.1589901",
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "raw_source_name": "IEEE Antennas and Propagation Magazine",
+        "raw_type": "journal-article",
+        "source": {
+          "display_name": "IEEE Antennas and Propagation Magazine",
+          "host_organization": "https://openalex.org/P4310319808",
+          "host_organization_lineage": [
+            "https://openalex.org/P4310319808"
+          ],
+          "host_organization_lineage_names": [
+            "Institute of Electrical and Electronics Engineers"
+          ],
+          "host_organization_name": "Institute of Electrical and Electronics Engineers",
+          "id": "https://openalex.org/S201045332",
+          "is_core": true,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": [
+            "1045-9243",
+            "1558-4143"
+          ],
+          "issn_l": "1045-9243",
+          "listed_in": [
+            "cwts-core",
+            "jufo-2",
+            "norway-1"
+          ],
+          "type": "journal"
+        },
+        "version": "publishedVersion"
+      },
+      "publication_year": 2005,
+      "title": "Roses are red, violets are blue... [sky colour"
+    }
+  ]
+}

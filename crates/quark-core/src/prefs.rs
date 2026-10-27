@@ -122,6 +122,8 @@ pub struct Prefs {
     pub ocr_langs: Vec<String>,
     /// LaTeX projects opened, the last first.
     pub tex_projects: Vec<String>,
+    /// Where new LaTeX projects are made.
+    pub tex_parent: String,
 }
 
 impl Default for Prefs {
@@ -161,6 +163,7 @@ impl Default for Prefs {
             library_folders: vec!["~/Documents/Books".into()],
             ocr_langs: vec!["eng".into()],
             tex_projects: Vec::new(),
+            tex_parent: "~/Documents/LaTeX".into(),
         }
     }
 }

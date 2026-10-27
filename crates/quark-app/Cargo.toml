@@ -37,6 +37,7 @@ quark-syntax.workspace = true
 quark-text.workspace = true
 quark-lsp.workspace = true
 quark-tex.workspace = true
+quark-literature.workspace = true
 crossbeam-channel.workspace = true
 
 [dev-dependencies]

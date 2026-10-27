@@ -434,9 +434,14 @@ fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState, prefs: &Prefs) -> Actio
 /// The LaTeX projects opened before, and a way to open another.
 fn latex_projects(ui: &mut Ui, p: &Palette, prefs: &Prefs) -> Action {
     let mut action = Action::None;
-    if widgets::primary_button(ui, p, "Open a project…", true).clicked() {
-        action = Action::Run(Command::OpenTexProject);
-    }
+    ui.horizontal(|ui| {
+        if widgets::primary_button(ui, p, "New project…", true).clicked() {
+            action = Action::Run(Command::NewTexProject);
+        }
+        if widgets::ghost_button(ui, p, "Open a project…").clicked() {
+            action = Action::Run(Command::OpenTexProject);
+        }
+    });
     ui.add_space(20.0);
     if prefs.tex_projects.is_empty() {
         ui.label(

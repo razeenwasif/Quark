@@ -1,0 +1,19 @@
+[package]
+name = "quark-literature"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The literature: papers asked of arXiv, Semantic Scholar, OpenAlex and Crossref, politely, and their open PDFs."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Blocking HTTP over rustls with the platform's certificates, as the agent
+# uses: no async runtime, and a proxy that re-signs TLS still works.
+ureq = { version = "3", default-features = false, features = ["rustls", "json", "platform-verifier"] }
+# arXiv answers in Atom.
+quick-xml = "0.41"
+# A kept PDF is recorded by its digest.
+sha2 = "0.10"

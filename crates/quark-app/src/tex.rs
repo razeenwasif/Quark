@@ -176,6 +176,24 @@ pub(crate) struct TexProject {
     pub view: DockView,
     /// The document's headings and words, as last read, and of which file.
     outline: (Option<PathBuf>, quark_tex::outline::Outline),
+    /// The cite picker, while it is open.
+    pub(crate) picker: Option<Picker>,
+}
+
+/// The cite picker: what is typed, what was found, which is chosen.
+#[derive(Default)]
+pub(crate) struct Picker {
+    pub cite: crate::cite::Cite,
+    pub field: String,
+    pub chosen: usize,
+    focused: bool,
+}
+
+impl Picker {
+    /// Everything found, the document's own first.
+    pub(crate) fn all(&self) -> Vec<quark_tex::bib::Citation> {
+        self.cite.local.iter().chain(self.cite.online_citations.iter()).cloned().collect()
+    }
 }
 
 /// The dock's views, once TeX is installed.
@@ -276,10 +294,186 @@ impl TexProject {
             forward: false,
             view: DockView::Pdf,
             outline: (None, Default::default()),
+            picker: None,
         };
         project.read_outline();
         project.sync();
         project
+    }
+
+    /// The main file citing is for: the document the file being edited is
+    /// part of.
+    fn main(&self) -> Option<PathBuf> {
+        let active = self.session.editor().buffer().path().map(Path::to_path_buf);
+        crate::texbuild::main_of(&self.root, active.as_deref())
+    }
+
+    /// Open the cite picker, at what was last searched.
+    pub(crate) fn open_picker(&mut self) {
+        let mut picker = self.picker.take().unwrap_or_default();
+        picker.focused = false;
+        let main = self.main();
+        let query = picker.field.clone();
+        picker.cite.search(main.as_deref(), &query);
+        self.picker = Some(picker);
+    }
+
+    /// Cite what is chosen: its key put at the cursor — inside a `\cite{`
+    /// already open, or as a `\cite{…}` of its own — and an online paper
+    /// added to the document's `.bib` first.
+    fn cite_chosen(&mut self) {
+        let Some(picker) = &self.picker else { return };
+        let Some(chosen) = picker.all().get(picker.chosen).cloned() else { return };
+        let key = if chosen.source == "online" {
+            let (Some(main), Some(record)) = (self.main(), picker.cite.online_record(&chosen.id)) else { return };
+            match crate::cite::cite_record(&main, &record) {
+                Ok(cited) => {
+                    if let Some(bib) = &cited.added {
+                        let name = bib.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        let extra = if cited.unnamed {
+                            format!(" — the document names no .bib: add \\bibliography{{{}}}", name.trim_end_matches(".bib"))
+                        } else {
+                            String::new()
+                        };
+                        self.said = Some((format!("added {} to {name}{extra}", cited.key), cited.unnamed));
+                        // The .bib, if it is open, read again: it changed on disk.
+                        self.session.editor_mut().reread_changed_on_disk();
+                        self.files = walk(&self.root);
+                    }
+                    cited.key
+                }
+                Err(why) => {
+                    self.said = Some((why, true));
+                    return;
+                }
+            }
+        } else {
+            chosen.key.clone()
+        };
+        let buffer = self.session.editor_mut().buffer_mut();
+        let at = buffer.cursor.offset;
+        let here = buffer.position(at);
+        let before: String = buffer.line(here.line).chars().take(here.column).collect();
+        let text = crate::cite::cite_text(&before, &key);
+        let n = text.chars().count();
+        buffer.apply(vec![quark_text::Edit::insert(at, text)], quark_text::Cursor::at(at + n));
+        self.picker = None;
+        self.sync();
+    }
+
+    /// The cite picker, over the editor.
+    fn picker_sheet(&mut self, ui: &mut Ui, p: &Palette) {
+        let Some(picker) = &mut self.picker else { return };
+        let main = {
+            let active = self.session.editor().buffer().path().map(Path::to_path_buf);
+            crate::texbuild::main_of(&self.root, active.as_deref())
+        };
+        let mut close = false;
+        let mut cite = false;
+        let mut online = false;
+        let modal = egui::Modal::new(egui::Id::new("quark-cite")).show(ui.ctx(), |ui| {
+            ui.set_width(560.0);
+            ui.label(RichText::new("Cite").font(theme::strong(15.0)).color(p.text));
+            ui.add_space(8.0);
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut picker.field)
+                    .hint_text("Authors, a title, a year, a key")
+                    .desired_width(f32::INFINITY),
+            );
+            if !picker.focused {
+                field.request_focus();
+                picker.focused = true;
+            }
+            if field.changed() {
+                picker.cite.search(main.as_deref(), &picker.field.clone());
+                picker.chosen = 0;
+            }
+            let all = picker.all();
+            let (down, up, enter) = ui.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                )
+            });
+            if down && picker.chosen + 1 < all.len() {
+                picker.chosen += 1;
+            }
+            if up {
+                picker.chosen = picker.chosen.saturating_sub(1);
+            }
+            if enter && !all.is_empty() {
+                cite = true;
+            }
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                let local = picker.cite.local.len();
+                if all.is_empty() {
+                    let none = if picker.field.trim().is_empty() { "Type to search the document's .bib." } else { "Nothing in the document's .bib." };
+                    ui.label(RichText::new(none).font(theme::body(12.5)).color(p.text_faint));
+                }
+                for (i, c) in all.iter().enumerate() {
+                    if i == local && local > 0 || (i == 0 && local == 0) && c.source == "online" {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("Online").font(theme::strong(11.5)).color(p.text_faint));
+                    }
+                    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
+                    if i == picker.chosen {
+                        ui.painter().rect_filled(rect, CornerRadius::same(8), p.accent_soft);
+                    }
+                    let byline = [Some(c.authors.clone()), c.year.clone(), c.venue.clone()].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+                    // The key on the right; the title cut to what is left of it.
+                    let key = ui.painter().text(rect.right_top() + vec2(-10.0, 6.0), egui::Align2::RIGHT_TOP, &c.key, code::font(), if c.source == "online" { p.text_faint } else { p.accent_text });
+                    let one_line = |text: &str, font: egui::FontId, colour: egui::Color32, width: f32| {
+                        let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::simple(font, colour));
+                        job.wrap = egui::text::TextWrapping { max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+                        job
+                    };
+                    let room = (key.left() - rect.left() - 26.0).max(40.0);
+                    let title = ui.painter().layout_job(one_line(&c.title, theme::strong(12.5), p.text, room));
+                    ui.painter().galley(rect.left_top() + vec2(10.0, 6.0), title, p.text);
+                    let by = ui.painter().layout_job(one_line(&byline, theme::body(11.5), p.text_muted, rect.width() - 20.0));
+                    ui.painter().galley(rect.left_top() + vec2(10.0, 25.0), by, p.text_muted);
+                    if response.clicked() {
+                        picker.chosen = i;
+                        cite = true;
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if picker.cite.searching() {
+                    ui.add(egui::Spinner::new().size(13.0));
+                    ui.label(RichText::new("Asking arXiv, Semantic Scholar and OpenAlex…").font(theme::body(12.0)).color(p.text_faint));
+                } else if quark_ui::widgets::ghost_button(ui, p, "Search online")
+                    .on_hover_text("arXiv, Semantic Scholar and OpenAlex: what is typed is sent to them")
+                    .clicked()
+                {
+                    online = true;
+                }
+                if let Some(note) = &picker.cite.note {
+                    ui.label(RichText::new(note).font(theme::body(11.5)).color(p.text_faint));
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if quark_ui::widgets::ghost_button(ui, p, "Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+        if online {
+            if let Some(job) = picker.cite.job() {
+                let fetch = quark_literature::Fetch::start(&crate::cite::context(), job);
+                picker.cite.online(fetch);
+            }
+        }
+        if close || modal.should_close() {
+            self.picker = None;
+            return;
+        }
+        if cite {
+            self.cite_chosen();
+        }
     }
 
     /// The headings, read again from the files as saved.
@@ -317,6 +511,14 @@ impl TexProject {
 
     /// What the servers have said since; whether to look again soon.
     pub(crate) fn poll(&mut self) -> bool {
+        let main = self.main();
+        let searching = match &mut self.picker {
+            Some(picker) => {
+                picker.cite.poll(main.as_deref());
+                picker.cite.searching()
+            }
+            None => false,
+        };
         for (_, message) in self.servers.poll() {
             match message {
                 Incoming::Completion { id, items } => {
@@ -329,7 +531,7 @@ impl TexProject {
         // Watched for a few seconds after it was told something, and while a
         // list is wanted: answers come on a thread, and nothing else wakes
         // the window for them.
-        self.told.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(4)) || self.popup.is_open()
+        self.told.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(4)) || self.popup.is_open() || searching
     }
 
     /// Ask for completions where the cursor is.
@@ -422,6 +624,9 @@ impl TexProject {
         for event in &events {
             match event {
                 egui::Event::Paste(text) => self.session.paste(text),
+                egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } if (modifiers.mac_cmd || modifiers.command) && modifiers.shift => {
+                    self.open_picker();
+                }
                 egui::Event::Key { key: egui::Key::B, pressed: true, modifiers, .. } if modifiers.mac_cmd || modifiers.command => {
                     self.wants_build = true;
                 }
@@ -522,18 +727,30 @@ impl TexProject {
         let panes = Rect::from_min_max(inner.min, pos2(inner.right(), status.top()));
         self.splits(ui, p, panes);
         self.status_line(ui, p, status);
+        self.picker_sheet(ui, p);
         asked
     }
 
     fn file_list(&mut self, ui: &mut Ui, p: &Palette) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(self.name()).font(theme::strong(13.0)).color(p.text));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("↻").on_hover_text("Look at the folder again").clicked() {
-                    self.files = walk(&self.root);
-                }
+        // The buttons first, from the right; the name in what they leave.
+        let name = self.name();
+        let mut refresh = false;
+        let mut cite = false;
+        let row = vec2(ui.available_width(), 24.0);
+        ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            refresh = ui.small_button("↻").on_hover_text("Look at the folder again").clicked();
+            cite = ui.small_button("Cite").on_hover_text("Cite a paper  ⌘⇧C").clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(RichText::new(&name).font(theme::strong(13.0)).color(p.text)).truncate())
+                    .on_hover_text(self.root.display().to_string());
             });
         });
+        if refresh {
+            self.files = walk(&self.root);
+        }
+        if cite {
+            self.open_picker();
+        }
         ui.add_space(6.0);
         let active = self.session.editor().buffer().path().map(Path::to_path_buf);
         let unsaved: Vec<PathBuf> = self
@@ -1196,5 +1413,51 @@ while (1) {
         let r = quark_tex::synctex::Rect { x: 72.0, y: 100.0, w: 200.0, h: 12.0 };
         let page = synctex_rect(&r, 792.0);
         assert_eq!((page.min.x, page.min.y, page.max.x, page.max.y), (72.0, 680.0, 272.0, 692.0));
+    }
+
+    #[test]
+    fn a_project_made_from_a_template_opens_at_its_main_file() {
+        let parent = std::env::temp_dir().join(format!("quark-tex-{}-templates", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).unwrap();
+        for t in quark_tex::templates::templates() {
+            let made = quark_tex::templates::create(&t.id, &parent, &format!("My {}", t.name)).unwrap();
+            let p = TexProject::open(&made.folder);
+            assert_eq!(p.session.editor().buffer().name(), "main.tex", "{}", t.id);
+            assert!(p.session.editor().buffer().contents().contains("\\documentclass"), "{}", t.id);
+        }
+        assert!(quark_tex::templates::create("article", &parent, "My Article").is_err(), "a folder already made is not written over");
+        assert!(crate::dialogs::new_tex_name_ok("My Paper_2-final"));
+        assert!(!crate::dialogs::new_tex_name_ok("../escape") && !crate::dialogs::new_tex_name_ok(".hidden") && !crate::dialogs::new_tex_name_ok("  "));
+        let _ = std::fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn a_paper_from_the_bib_is_cited_at_the_cursor() {
+        let root = project("cite");
+        std::fs::write(root.join("main.tex"), "\\documentclass{article}\n\\begin{document}\nAs shown \n\\bibliography{refs}\n\\end{document}\n").unwrap();
+        std::fs::write(root.join("refs.bib"), "@book{knuth1984,\n  title = {The TeXbook},\n  author = {Donald E. Knuth},\n  year = {1984}\n}\n").unwrap();
+        let mut p = TexProject::open(&root);
+        for c in "3G$".chars() {
+            p.key(&Key::char(c));
+        }
+        p.key(&Key::char('a'));
+        p.open_picker();
+        let picker = p.picker.as_mut().unwrap();
+        picker.field = "knuth".into();
+        let main = root.join("main.tex");
+        picker.cite.search(Some(&main), "knuth");
+        assert_eq!(picker.all().len(), 1);
+        p.cite_chosen();
+        assert!(p.picker.is_none(), "closed once cited");
+        assert!(p.session.editor().buffer().contents().contains("As shown \\cite{knuth1984}\n"), "{}", p.session.editor().buffer().contents());
+        // Inside a \cite{ already open, the key alone.
+        for c in " \\cite{".chars() {
+            p.key(&Key::char(c));
+        }
+        p.open_picker();
+        p.cite_chosen();
+        assert!(p.session.editor().buffer().contents().contains("\\cite{knuth1984} \\cite{knuth1984}"), "{}", p.session.editor().buffer().contents());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -466,4 +466,73 @@ mod tests {
         drop(tex);
         let _ = std::fs::remove_dir_all(root.parent().unwrap());
     }
+
+    #[test]
+    #[ignore = "draws pictures; run with QUARK_SHOTS set"]
+    fn shot_citing_and_a_new_project() {
+        use quark_literature::fetch::{Fetch, Reply};
+        use quark_literature::model::{Candidate, LiteratureSource, Record};
+        let Some(dir) = folder() else { return };
+        let root = crate::tex::tests::project("shot-cite");
+        std::fs::write(root.join("main.tex"), "\\documentclass{article}\n\\begin{document}\nAttention mechanisms \n\\bibliography{refs}\n\\end{document}\n").unwrap();
+        std::fs::write(
+            root.join("refs.bib"),
+            "@inproceedings{bahdanau2015,\n  title = {Neural Machine Translation by Jointly Learning to Align and Translate},\n  author = {Dzmitry Bahdanau and Kyunghyun Cho and Yoshua Bengio},\n  year = {2015},\n  booktitle = {ICLR}\n}\n",
+        )
+        .unwrap();
+        let mut tex = crate::tex::TexProject::open(&root);
+        tex.open_picker();
+        let main = root.join("main.tex");
+        {
+            let picker = tex.picker.as_mut().unwrap();
+            picker.field = "attention".into();
+            picker.cite.search(Some(&main), "align");
+            let record = |title: &str, authors: &[&str], year: u32, source: LiteratureSource| Record {
+                title: title.into(),
+                authors: authors.iter().map(|a| a.to_string()).collect(),
+                year: Some(year),
+                venue: Some("NeurIPS".into()),
+                sources: vec![source],
+                ..Default::default()
+            };
+            picker.cite.online(Fetch::scripted(vec![Reply::Searched {
+                candidates: vec![
+                    Candidate { record: record("Attention Is All You Need", &["Ashish Vaswani", "Noam Shazeer"], 2017, LiteratureSource::Arxiv), queries: vec![], rank: 0 },
+                    Candidate { record: record("Effective Approaches to Attention-based Neural Machine Translation", &["Minh-Thang Luong"], 2015, LiteratureSource::SemanticScholar), queries: vec![], rank: 1 },
+                ],
+                failures: vec![],
+            }]));
+            picker.cite.poll(Some(&main));
+            picker.chosen = 1;
+        }
+        let ctx = egui::Context::default();
+        theme::install_fonts(&ctx);
+        theme::apply(&ctx, ThemeMode::Dark);
+        let p = Palette::for_mode(ThemeMode::Dark);
+        let missing = quark_lab::tex::TexState::Missing { needs: vec![], free: 90 << 30, home: "/Users/you/.quark/tex".into() };
+        let mut dock = crate::texdock::Dock::default();
+        shoot(&ctx, egui::vec2(1320.0, 760.0), 6, &dir.join("latex-cite.png"), |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
+                tex.show(ui, &p, Some(&missing), &mut dock, None);
+            });
+        })
+        .unwrap();
+        // The new project dialog, over home.
+        let ctx = egui::Context::default();
+        theme::install_fonts(&ctx);
+        theme::apply(&ctx, ThemeMode::Dark);
+        let mut dialog = crate::dialogs::Dialog::NewTex {
+            templates: quark_tex::templates::templates(),
+            chosen: 1,
+            name: "Sampling notes".into(),
+            parent: "~/Documents/LaTeX".into(),
+        };
+        shoot(&ctx, egui::vec2(1100.0, 720.0), 6, &dir.join("latex-new.png"), |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground)).show(ui, |_| {});
+            dialog.show(ui.ctx(), &p);
+        })
+        .unwrap();
+        drop(tex);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
