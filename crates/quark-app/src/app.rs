@@ -260,10 +260,22 @@ impl App {
 
     /// TeX's planning or making, once a frame.
     pub(crate) fn tend_tex(&mut self, ctx: &Context) {
-        let Some(env) = self.tex_env.as_mut() else { return };
-        env.poll();
-        if env.working() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        if let Some(env) = self.tex_env.as_mut() {
+            env.poll();
+            if env.working() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            }
+            // texlab from Quark's own TeX, once there is one.
+            if let Some(tex) = self.tex.as_mut().filter(|t| t.own_texlab.is_none()) {
+                if let Some(marker) = env.marker() {
+                    tex.set_texlab(marker.texlab_bin);
+                }
+            }
+        }
+        if let Some(tex) = self.tex.as_mut() {
+            if tex.poll() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
         }
     }
 

@@ -7,6 +7,7 @@
 
 pub mod client;
 pub mod protocol;
+pub mod servers;
 pub mod transport;
 pub mod uri;
 

@@ -90,6 +90,11 @@ impl Session {
         &self.editor
     }
 
+    /// The editor, to change: what a language server's completion puts in.
+    pub fn editor_mut(&mut self) -> &mut Editor {
+        &mut self.editor
+    }
+
     pub fn mode(&self) -> VimMode {
         self.vim.mode()
     }

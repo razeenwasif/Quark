@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use egui::{CornerRadius, Rect, RichText, Sense, Ui, pos2, vec2};
+use quark_lsp::client::Incoming;
+use quark_lsp::servers::{self, Popup, Servers};
 use quark_modal::key::Key;
 use quark_modal::session::{Said, Session};
 use quark_modal::vim::VimMode;
@@ -154,6 +156,52 @@ pub(crate) struct TexProject {
     said: Option<(String, bool)>,
     /// How far each split is scrolled sideways, in cells.
     lefts: Vec<usize>,
+    /// texlab: told what each file says, asked for completions, and what
+    /// it says of the files kept.
+    pub servers: Servers,
+    pub(crate) popup: Popup,
+    /// When a server was last told something, so its answer is watched for.
+    told: Option<std::time::Instant>,
+    /// Where the cursor was drawn last, for the popup to sit by.
+    cursor_at: Option<Rect>,
+    /// Quark's own texlab, once it has been given it.
+    pub own_texlab: Option<PathBuf>,
+}
+
+/// What a key does while the completion list is showing: moves in it,
+/// takes the chosen one, closes it — or is the editor's, as typing that
+/// narrows the list is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListKey {
+    Move(i32),
+    Accept,
+    Close,
+    /// Closes it, and is the editor's too.
+    CloseAndPass,
+    Pass,
+}
+
+pub(crate) fn list_key(key: &Key) -> ListKey {
+    match key.key.as_str() {
+        "Tab" | "ArrowDown" => ListKey::Move(1),
+        "ArrowUp" => ListKey::Move(-1),
+        "n" if key.ctrl => ListKey::Move(1),
+        "p" if key.ctrl => ListKey::Move(-1),
+        "Enter" => ListKey::Accept,
+        // Escape closes the list and stays in insert mode: leaving insert
+        // too would punish anyone who wanted to keep typing.
+        "Escape" => ListKey::Close,
+        // The list no longer describes what is there.
+        "Backspace" => ListKey::CloseAndPass,
+        _ => ListKey::Pass,
+    }
+}
+
+/// Whether a character typed in insert mode asks the server again: one it
+/// names (texlab's `\`, `{`, `,`), or a letter while the list is showing,
+/// which narrows it.
+pub(crate) fn asks_again(c: char, triggers: bool, open: bool) -> bool {
+    triggers || (open && (c.is_alphanumeric() || c == '_' || c == ':'))
 }
 
 impl TexProject {
@@ -168,7 +216,108 @@ impl TexProject {
                 said = Some((format!("{}: {e}", main.display()), true));
             }
         }
-        TexProject { root, session, files, syntaxes: HashMap::new(), said, lefts: Vec::new() }
+        let mut servers = Servers::new(&root);
+        servers.enable();
+        let mut project = TexProject {
+            root,
+            session,
+            files,
+            syntaxes: HashMap::new(),
+            said,
+            lefts: Vec::new(),
+            servers,
+            popup: Popup::default(),
+            told: None,
+            cursor_at: None,
+            own_texlab: None,
+        };
+        project.sync();
+        project
+    }
+
+    /// texlab is Quark's own now: started from there.
+    pub(crate) fn set_texlab(&mut self, program: PathBuf) {
+        self.servers.set_program("latex", program.clone());
+        self.own_texlab = Some(program);
+        self.sync();
+    }
+
+    /// The file in focus, as the server should have it.
+    fn sync(&mut self) {
+        self.servers.sync(self.session.editor().buffer());
+        // Its diagnostics come back a moment later, on a thread.
+        self.told = Some(std::time::Instant::now());
+    }
+
+    /// What the servers have said since; whether to look again soon.
+    pub(crate) fn poll(&mut self) -> bool {
+        for (_, message) in self.servers.poll() {
+            match message {
+                Incoming::Completion { id, items } => {
+                    self.popup.fill(id, items);
+                }
+                Incoming::Failed { text } => self.said = Some((text, true)),
+                _ => {}
+            }
+        }
+        // Watched for a few seconds after it was told something, and while a
+        // list is wanted: answers come on a thread, and nothing else wakes
+        // the window for them.
+        self.told.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(4)) || self.popup.is_open()
+    }
+
+    /// Ask for completions where the cursor is.
+    fn ask_completion(&mut self) {
+        let buffer = self.session.editor().buffer();
+        let Some(path) = buffer.path().map(Path::to_path_buf) else { return };
+        let at = servers::position_of(buffer, buffer.cursor.offset);
+        if let Some(id) = self.servers.completion(&path, at) {
+            self.popup.expect(id);
+            self.told = Some(std::time::Instant::now());
+        }
+    }
+
+    /// One key: the list's first, when it is showing, then the editor's.
+    fn key(&mut self, key: &Key) -> Vec<Said> {
+        if self.popup.is_open() {
+            match list_key(key) {
+                ListKey::Move(by) => {
+                    self.popup.move_by(by);
+                    return Vec::new();
+                }
+                ListKey::Accept => {
+                    if let Some(item) = self.popup.chosen().cloned() {
+                        self.popup.close();
+                        servers::apply_completion(self.session.editor_mut().buffer_mut(), &item);
+                    }
+                    return Vec::new();
+                }
+                ListKey::Close => {
+                    self.popup.close();
+                    return Vec::new();
+                }
+                ListKey::CloseAndPass => self.popup.close(),
+                ListKey::Pass => {}
+            }
+        }
+        let was = self.session.mode();
+        let said = self.session.key(key);
+        let typed = key.as_char().filter(|_| key.is_bare_char());
+        if was == VimMode::Insert && self.session.mode() == VimMode::Insert {
+            if let Some(c) = typed {
+                let path = self.session.editor().buffer().path().map(Path::to_path_buf);
+                let triggers = path.as_deref().is_some_and(|p| self.servers.can(p).triggers_on(c));
+                if asks_again(c, triggers, self.popup.is_open()) {
+                    self.sync();
+                    self.ask_completion();
+                } else if self.popup.is_open() {
+                    self.popup.close();
+                }
+            }
+        } else if self.popup.is_open() {
+            self.popup.close();
+        }
+        said
     }
 
     pub(crate) fn name(&self) -> String {
@@ -186,6 +335,19 @@ impl TexProject {
         self.tell(said);
     }
 
+    /// The server's word on the file in focus at the cursor's line, if any.
+    fn diagnostic_here(&self) -> Option<(String, bool)> {
+        let buffer = self.session.editor().buffer();
+        let path = buffer.path()?;
+        let line = buffer.position(buffer.cursor.offset).line;
+        let raw = self.servers.diagnostics_for(path);
+        let mut here: Vec<servers::Diagnostic> =
+            raw.iter().map(|d| servers::diagnostic(buffer, d)).filter(|d| d.line <= line && line <= d.end_line).collect();
+        here.sort_by_key(|d| d.severity as u8);
+        let first = here.first()?;
+        Some((first.message.clone(), first.severity == servers::Severity::Error))
+    }
+
     /// Keys for the editor, as they came this frame; what it said kept for
     /// the status line, what it yanked put on the clipboard.
     pub(crate) fn input(&mut self, ctx: &egui::Context) {
@@ -200,7 +362,7 @@ impl TexProject {
                 egui::Event::Cut if self.session.vim().is_selecting() => said.extend(self.session.key(&Key::char('d'))),
                 _ => {
                     for key in key_of(event) {
-                        said.extend(self.session.key(&key));
+                        said.extend(self.key(&key));
                     }
                 }
             }
@@ -209,6 +371,7 @@ impl TexProject {
             ctx.copy_text(text);
         }
         self.tell(said);
+        self.sync();
     }
 
     fn tell(&mut self, said: Vec<Said>) {
@@ -217,6 +380,7 @@ impl TexProject {
                 Said::Info(text) => Some((text, false)),
                 Said::Warn(text) => Some((text, true)),
                 Said::Wrote(path) => {
+                    self.servers.saved(self.session.editor().buffer());
                     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
                     // A file made by `:w` or `:e` belongs in the list.
                     if !self.files.iter().any(|f| f.path == path) {
@@ -316,6 +480,8 @@ impl TexProject {
             if let Err(e) = self.session.open(&path) {
                 self.said = Some((format!("{}: {e}", path.display()), true));
             }
+            self.popup.close();
+            self.sync();
         }
     }
 
@@ -345,8 +511,27 @@ impl TexProject {
             if self.session.splits().at(view).map(|v| v.lines) != Some(lines) {
                 self.session.set_lines(view, lines);
             }
-            let draw = ViewDraw { view, focused: view == focused, active: true, syntax, tab, left: &mut self.lefts[view] };
-            let got = code::show(ui, p, &self.session, draw, rect);
+            // What the server says of the file, against it as it is now.
+            let diagnostics: Vec<servers::Diagnostic> = match (&path, self.session.view_of(view)) {
+                (Some(path), Some((b, ..))) => match self.session.editor().buffers().get(b) {
+                    Some(buffer) => self.servers.diagnostics_for(path).iter().map(|d| servers::diagnostic(buffer, d)).collect(),
+                    None => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            let draw = ViewDraw {
+                view,
+                focused: view == focused,
+                active: true,
+                syntax,
+                tab,
+                left: &mut self.lefts[view],
+                diagnostics: &diagnostics,
+            };
+            let (got, cursor) = code::show(ui, p, &self.session, draw, rect);
+            if view == focused {
+                self.cursor_at = cursor;
+            }
             if got != Pointer::None {
                 pointer = got;
             }
@@ -354,11 +539,58 @@ impl TexProject {
                 ui.painter().rect_stroke(rect, CornerRadius::ZERO, egui::Stroke::new(1.0, p.accent_alpha(0x60)), egui::StrokeKind::Inside);
             }
         }
+        self.completion_list(ui, p);
+        if pointer != Pointer::None {
+            self.popup.close();
+        }
         match pointer {
             Pointer::Click { view, line, column } => self.session.click(view, line, column),
             Pointer::Drag { line, column } => self.session.select_to(line, column),
             Pointer::Scroll { view, lines } => self.session.scroll(view, lines),
             Pointer::None => {}
+        }
+    }
+
+    /// The completions, under the cursor: the chosen one lit, its hint dim.
+    fn completion_list(&mut self, ui: &mut Ui, p: &Palette) {
+        let (true, Some(at)) = (self.popup.is_open(), self.cursor_at) else { return };
+        const ROWS: usize = 9;
+        let items = self.popup.items();
+        let chosen = self.popup.selected();
+        // The chosen one kept in view.
+        let first = chosen.saturating_sub(ROWS - 1);
+        let mut clicked = None;
+        egui::Area::new(ui.id().with("tex-completions"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(at.left_bottom() + vec2(-4.0, 4.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(4).show(ui, |ui| {
+                    ui.set_width(340.0);
+                    for (i, item) in items.iter().enumerate().skip(first).take(ROWS) {
+                        let (rect, response) = ui.allocate_exact_size(vec2(340.0, 22.0), Sense::click());
+                        if i == chosen {
+                            ui.painter().rect_filled(rect, CornerRadius::same(4), p.accent_soft);
+                        }
+                        ui.painter().text(rect.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, &item.label, code::font(), if i == chosen { p.accent_text } else { p.text });
+                        if let Some(hint) = &item.hint {
+                            let hint = quark_ui::widgets::elide(hint, 26, false);
+                            ui.painter().text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, hint, theme::body(11.0), p.text_faint);
+                        }
+                        if response.clicked() {
+                            clicked = Some(i);
+                        }
+                    }
+                    if items.len() > ROWS {
+                        ui.label(RichText::new(format!("{} of {}", chosen + 1, items.len())).font(theme::body(10.5)).color(p.text_faint));
+                    }
+                });
+            });
+        if let Some(i) = clicked {
+            self.popup.select(i);
+            if let Some(item) = self.popup.chosen().cloned() {
+                self.popup.close();
+                servers::apply_completion(self.session.editor_mut().buffer_mut(), &item);
+            }
         }
     }
 
@@ -398,8 +630,10 @@ impl TexProject {
         };
         let file = format!("{name}{}", if buffer.is_modified() { "  •" } else { "" });
         painter.text(pos2(pill_rect.right() + 10.0, mid), egui::Align2::LEFT_CENTER, file, theme::body(12.0), p.text_muted);
-        if let Some((text, warn)) = &self.said {
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, theme::body(12.0), if *warn { p.warning } else { p.text_faint });
+        // What was said last, or else the server's word on this line.
+        if let Some((text, warn)) = self.said.clone().or_else(|| self.diagnostic_here()) {
+            let text = quark_ui::widgets::elide(&text, 90, false);
+            painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, theme::body(12.0), if warn { p.warning } else { p.text_faint });
         }
         let at = buffer.position(buffer.cursor.offset);
         let place = format!("{}:{}", at.line + 1, at.column + 1);
@@ -421,10 +655,10 @@ pub(crate) fn split_rect(area: Rect, view: usize, count: usize, vertical: bool) 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn project(name: &str) -> PathBuf {
+    pub(crate) fn project(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("quark-tex-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for dir in ["chapters", ".git", "build", "figures"] {
@@ -498,5 +732,107 @@ mod tests {
         assert_eq!(split_rect(area, 0, 1, true), Rect::from_min_max(pos2(0.0, 0.0), pos2(899.0, 600.0)));
         assert_eq!(split_rect(area, 1, 3, true), Rect::from_min_max(pos2(300.0, 0.0), pos2(599.0, 600.0)));
         assert_eq!(split_rect(area, 1, 2, false), Rect::from_min_max(pos2(0.0, 300.0), pos2(900.0, 599.0)));
+    }
+
+    #[test]
+    fn the_list_takes_the_keys_that_mean_something_to_it() {
+        assert_eq!(list_key(&Key::named("Tab")), ListKey::Move(1));
+        assert_eq!(list_key(&Key::ctrl('p')), ListKey::Move(-1));
+        assert_eq!(list_key(&Key::named("Enter")), ListKey::Accept);
+        assert_eq!(list_key(&Key::named("Escape")), ListKey::Close);
+        assert_eq!(list_key(&Key::named("Backspace")), ListKey::CloseAndPass);
+        assert_eq!(list_key(&Key::char('n')), ListKey::Pass, "a bare n is typing");
+        assert!(asks_again('\\', true, false), "a trigger asks");
+        assert!(asks_again('s', false, true), "a letter narrows the list showing");
+        assert!(!asks_again('s', false, false), "a letter alone asks nothing");
+        assert!(!asks_again(' ', false, true), "a space ends the word, and the list");
+    }
+
+    #[test]
+    fn a_diagnostic_marks_what_it_names_on_each_line_it_spans() {
+        let d = servers::Diagnostic {
+            line: 1,
+            column: 4,
+            end_line: 3,
+            end_column: 2,
+            severity: servers::Severity::Error,
+            message: String::new(),
+            source: None,
+            code: None,
+        };
+        assert_eq!(code::marked_on(&d, 0, 10), None);
+        assert_eq!(code::marked_on(&d, 1, 10), Some((4, 10)));
+        assert_eq!(code::marked_on(&d, 2, 6), Some((0, 6)));
+        assert_eq!(code::marked_on(&d, 3, 9), Some((0, 2)));
+        let point = servers::Diagnostic { line: 0, column: 3, end_line: 0, end_column: 3, ..d.clone() };
+        assert_eq!(code::marked_on(&point, 0, 9), Some((3, 4)), "at least a character");
+        assert_eq!(code::marked_on(&point, 0, 2), Some((2, 3)), "on a short line, at its end");
+    }
+
+    /// texlab, standing in: answers the handshake with `\` and `{` as
+    /// triggers, says the first line of a file opened has an error, and
+    /// offers `\section` for a completion.
+    pub(crate) const STAND_IN: &str = r#"#!/usr/bin/perl
+use strict; $| = 1;
+sub send_json { my $b = shift; print "Content-Length: " . length($b) . "\r\n\r\n" . $b; }
+while (1) {
+  my $len = 0;
+  while (my $line = <STDIN>) { last if $line eq "\r\n"; $len = $1 if $line =~ /Content-Length: (\d+)/i; }
+  last unless $len;
+  read(STDIN, my $body, $len);
+  my ($id) = $body =~ /"id":(\d+)/;
+  if ($body =~ /"method":"initialize"/) {
+    send_json(qq({"jsonrpc":"2.0","id":$id,"result":{"capabilities":{"completionProvider":{"triggerCharacters":["\\\\","{"]}},"serverInfo":{"name":"stand-in"}}}));
+  } elsif ($body =~ /"method":"textDocument\/didOpen"/) {
+    my ($uri) = $body =~ /"uri":"([^"]+)"/;
+    send_json(qq({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"$uri","diagnostics":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":4}},"severity":1,"message":"Undefined control sequence."}]}}));
+  } elsif ($body =~ /"method":"textDocument\/completion"/) {
+    send_json(qq({"jsonrpc":"2.0","id":$id,"result":{"isIncomplete":false,"items":[{"label":"\\\\section","insertText":"section","kind":3,"detail":"a heading"}]}}));
+  } elsif ($body =~ /"method":"shutdown"/) {
+    send_json(qq({"jsonrpc":"2.0","id":$id,"result":null}));
+  } elsif ($body =~ /"method":"exit"/) { last; }
+}
+"#;
+
+    pub(crate) fn settle(project: &mut TexProject, done: impl Fn(&TexProject) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(project) {
+            assert!(std::time::Instant::now() < deadline, "the server never answered");
+            project.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn texlab_is_told_the_file_says_what_is_wrong_and_completes_a_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = project("lsp");
+        std::fs::write(root.join("main.tex"), "\\badcommand\nText \n").unwrap();
+        let server = root.join("stand-in-texlab");
+        std::fs::write(&server, STAND_IN).unwrap();
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut project = TexProject::open(&root);
+        project.set_texlab(server);
+        // Told of the file it opened at, and its first line marked.
+        settle(&mut project, |p| p.diagnostic_here().is_some());
+        let (said, error) = project.diagnostic_here().unwrap();
+        assert_eq!((said.as_str(), error), ("Undefined control sequence.", true));
+
+        // `\` at the end of the second line, in insert mode: the list comes,
+        // and Enter takes its first.
+        for key in [Key::char('j'), Key::char('A')] {
+            project.key(&key);
+        }
+        project.key(&Key::char('\\'));
+        settle(&mut project, |p| p.popup.is_open());
+        assert_eq!(project.popup.items()[0].label, "\\section");
+        project.key(&Key::named("Enter"));
+        assert!(!project.popup.is_open());
+        let text = project.session.editor().buffer().contents();
+        assert_eq!(text, "\\badcommand\nText \\section\n", "the command completed where it was typed");
+        assert_eq!(project.session.mode(), VimMode::Insert, "and still typing");
+        drop(project);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

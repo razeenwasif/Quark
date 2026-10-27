@@ -10,3 +10,5 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The buffers servers are told about, and edited by.
+quark-text = { workspace = true }

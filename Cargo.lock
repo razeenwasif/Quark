@@ -3162,6 +3162,7 @@ dependencies = [
  "quark-ai",
  "quark-core",
  "quark-lab",
+ "quark-lsp",
  "quark-modal",
  "quark-pdf",
  "quark-shell",
@@ -3212,6 +3213,7 @@ dependencies = [
 name = "quark-lsp"
 version = "0.1.0"
 dependencies = [
+ "quark-text",
  "serde",
  "serde_json",
 ]

@@ -178,6 +178,30 @@ pub(crate) struct ViewDraw<'a> {
     /// How far it is scrolled sideways, in cells: kept by the caller, moved
     /// here to follow the cursor.
     pub left: &'a mut usize,
+    /// What the language server says of the file, in its own coordinates.
+    pub diagnostics: &'a [quark_lsp::servers::Diagnostic],
+}
+
+/// A diagnostic's colour: errors red, warnings amber, the rest quiet.
+pub(crate) fn severity_colour(severity: quark_lsp::servers::Severity, p: &Palette) -> Color32 {
+    use quark_lsp::servers::Severity;
+    match severity {
+        Severity::Error => Color32::from_rgb(0xe5, 0x48, 0x4d),
+        Severity::Warning => Color32::from_rgb(0xe8, 0xa8, 0x3a),
+        _ => p.text_faint,
+    }
+}
+
+/// The span of a line a diagnostic covers, in character columns: the whole
+/// of what it names on lines it spans, at least one character.
+pub(crate) fn marked_on(d: &quark_lsp::servers::Diagnostic, line: usize, line_len: usize) -> Option<(usize, usize)> {
+    if line < d.line || line > d.end_line {
+        return None;
+    }
+    let from = if line == d.line { d.column } else { 0 };
+    let to = if line == d.end_line { d.end_column } else { line_len };
+    let from = from.min(line_len);
+    Some((from, to.max(from + 1)))
 }
 
 /// What a pointer did in a split.
@@ -193,9 +217,12 @@ pub(crate) enum Pointer {
 }
 
 /// Draw split `d.view` in `rect`, and say what the pointer did to it.
-pub(crate) fn show(ui: &mut Ui, p: &Palette, session: &Session, d: ViewDraw, rect: Rect) -> Pointer {
-    let Some((buffer_index, cursor, first)) = session.view_of(d.view) else { return Pointer::None };
-    let Some(buffer) = session.editor().buffers().get(buffer_index) else { return Pointer::None };
+/// Draw split `d.view` in `rect`: what the pointer did to it, and where its
+/// cursor is drawn, for what sits by it — completions.
+pub(crate) fn show(ui: &mut Ui, p: &Palette, session: &Session, d: ViewDraw, rect: Rect) -> (Pointer, Option<Rect>) {
+    let Some((buffer_index, cursor, first)) = session.view_of(d.view) else { return (Pointer::None, None) };
+    let Some(buffer) = session.editor().buffers().get(buffer_index) else { return (Pointer::None, None) };
+    let mut cursor_rect = None;
     let char_w = ui.fonts_mut(|f| f.glyph_width(&font(), 'M'));
     let m = Metrics::new(char_w, buffer.len_lines());
     let response = ui.interact(rect, ui.id().with(("code-view", d.view)), Sense::click_and_drag());
@@ -252,6 +279,25 @@ pub(crate) fn show(ui: &mut Ui, p: &Palette, session: &Session, d: ViewDraw, rec
             let r = Rect::from_min_max(pos2(cell_x(a), y), pos2(right.max(cell_x(a) + 2.0), y + m.line_h));
             text_painter.rect_filled(r, CornerRadius::same(2), p.accent_alpha(0x55));
         }
+        // What the server says of it: a line under each thing it names.
+        for diag in d.diagnostics {
+            if let Some((a, b)) = marked_on(diag, line, len) {
+                let colour = severity_colour(diag.severity, p);
+                let x0 = cell_x(a);
+                let x1 = cell_x(b).max(x0 + m.char_w);
+                let base = y + m.line_h - 3.0;
+                // A wave, as editors draw them.
+                let mut points = Vec::new();
+                let mut x = x0;
+                let mut up = true;
+                while x <= x1 {
+                    points.push(pos2(x, if up { base - 1.5 } else { base + 1.0 }));
+                    x += 2.5;
+                    up = !up;
+                }
+                text_painter.add(egui::Shape::line(points, Stroke::new(1.2, colour)));
+            }
+        }
         // The text, in its colours.
         let shown = expanded(text, d.tab);
         let mut job = egui::text::LayoutJob::default();
@@ -283,6 +329,7 @@ pub(crate) fn show(ui: &mut Ui, p: &Palette, session: &Session, d: ViewDraw, rec
         // The cursor: a block in normal mode, a bar where text goes in.
         if line == head.line && d.focused {
             let x = cell_x(head.column);
+            cursor_rect = Some(Rect::from_min_size(pos2(x, y), vec2(m.char_w, m.line_h)));
             let w = chars.get(head.column).map_or(m.char_w, |c| if *c == '\t' { cell_x(head.column + 1) - x } else { m.char_w });
             let colour = if d.active { p.accent } else { p.text_faint };
             match session.mode() {
@@ -312,6 +359,11 @@ pub(crate) fn show(ui: &mut Ui, p: &Palette, session: &Session, d: ViewDraw, rec
     painter.rect_filled(gutter, CornerRadius::ZERO, p.canvas);
     painter.rect_filled(gutter, CornerRadius::ZERO, p.wash(0x04));
     for (line, y) in numbers {
+        // The worst the server says of the line, as a dot by its number.
+        let worst = d.diagnostics.iter().filter(|g| g.line <= line && line <= g.end_line).map(|g| g.severity).min_by_key(|s| *s as u8);
+        if let Some(severity) = worst {
+            painter.circle_filled(pos2(rect.left() + 8.0, y + m.line_h / 2.0), 3.0, severity_colour(severity, p));
+        }
         painter.text(
             pos2(rect.left() + m.gutter_w - GUTTER_PAD, y + m.line_h / 2.0),
             egui::Align2::RIGHT_CENTER,
@@ -333,22 +385,22 @@ pub(crate) fn show(ui: &mut Ui, p: &Palette, session: &Session, d: ViewDraw, rec
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         let wheel = ui.input(|i| i.smooth_scroll_delta.y);
         if wheel.abs() > 0.5 {
-            return Pointer::Scroll { view: d.view, lines: (-wheel / m.line_h).round() as i64 };
+            return (Pointer::Scroll { view: d.view, lines: (-wheel / m.line_h).round() as i64 }, cursor_rect);
         }
     }
     if response.drag_started() || response.clicked() {
         if let Some(pos) = response.interact_pointer_pos() {
             let (line, column) = to_line_col(pos);
-            return Pointer::Click { view: d.view, line, column };
+            return (Pointer::Click { view: d.view, line, column }, cursor_rect);
         }
     }
     if response.dragged() {
         if let Some(pos) = response.interact_pointer_pos() {
             let (line, column) = to_line_col(pos);
-            return Pointer::Drag { line, column };
+            return (Pointer::Drag { line, column }, cursor_rect);
         }
     }
-    Pointer::None
+    (Pointer::None, cursor_rect)
 }
 
 #[cfg(test)]

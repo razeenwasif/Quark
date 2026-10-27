@@ -351,4 +351,58 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    #[ignore = "draws pictures; run with QUARK_SHOTS set"]
+    fn shot_texlab_in_the_editor() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(dir) = folder() else { return };
+        let root = crate::tex::tests::project("shot-lsp");
+        std::fs::write(
+            root.join("main.tex"),
+            "\\documentclass{article}\n\\begin{document}\n\\badcommand{here}\nSome text, and then a heading:\n\n\\end{document}\n",
+        )
+        .unwrap();
+        let server = root.join("stand-in-texlab");
+        std::fs::write(&server, crate::tex::tests::STAND_IN).unwrap();
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut tex = crate::tex::TexProject::open(&root);
+        tex.set_texlab(server);
+        crate::tex::tests::settle(&mut tex, |p| !p.servers.diagnostics_for(&root.join("main.tex")).is_empty() || !p.servers.diagnostics_for(&quark_modal::root::normalise(&root.join("main.tex"))).is_empty());
+        for c in "4GA ".chars() {
+            tex.session.key(&quark_modal::key::Key::char(c));
+        }
+        // The `\` through the project, so it asks.
+        let ctx = egui::Context::default();
+        theme::install_fonts(&ctx);
+        theme::apply(&ctx, ThemeMode::Dark);
+        let p = Palette::for_mode(ThemeMode::Dark);
+        let mut events = vec![egui::Event::Text("\\".into())];
+        let ready = quark_lab::tex::TexState::Ready {
+            tinytex: "v2026.10".into(),
+            texlab: "v5.26.0".into(),
+            bundle: quark_lab::tex::Bundle::Full,
+            size: 241 << 20,
+            home: "/Users/you/.quark/tex".into(),
+        };
+        let mut dock = crate::texdock::Dock::default();
+        let mut frames = 0;
+        shoot(&ctx, egui::vec2(1320.0, 700.0), 30, &dir.join("latex-lsp.png"), |ui| {
+            frames += 1;
+            if !events.is_empty() {
+                ui.ctx().input_mut(|i| i.events.append(&mut events));
+                tex.input(ui.ctx());
+            }
+            // Give the stand-in a moment to answer.
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            tex.poll();
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
+                tex.show(ui, &p, Some(&ready), &mut dock);
+            });
+        })
+        .unwrap();
+        assert!(frames > 0);
+        drop(tex);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
