@@ -548,7 +548,7 @@ impl App {
                     }
                     let key = crate::textures::PageKey::new(
                         page,
-                        tab.layout.scale,
+                        tab.raster_scale(),
                         tab.rotation,
                         self.prefs.tint,
                     );
@@ -566,7 +566,7 @@ impl App {
                         continue;
                     };
                     let size = tab.info.page_size(page);
-                    let scale = 150.0 / size.width.max(size.height).max(1.0);
+                    let scale = crate::panels::thumb_edge(ctx) as f32 / size.width.max(size.height).max(1.0);
                     let key = crate::textures::PageKey::new(page, scale, Rot::D0, self.prefs.tint);
                     self.textures.insert(ctx, key, &raster);
                 }

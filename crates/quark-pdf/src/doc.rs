@@ -201,6 +201,18 @@ impl DocInfo {
         self.pages.iter().map(|p| p.size).collect()
     }
 
+    /// Whether any page has a label of its own: front matter in roman
+    /// numerals, an appendix's A-1.
+    pub fn has_labels(&self) -> bool {
+        self.pages.iter().any(|p| p.label.is_some())
+    }
+
+    /// The page a label names, the first when two share one.
+    pub fn page_for_label(&self, label: &str) -> Option<usize> {
+        let label = label.trim();
+        self.pages.iter().position(|p| p.label.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(label)))
+    }
+
     /// The label to show for a page, honouring `/PageLabels`.
     pub fn page_label(&self, index: usize) -> String {
         self.pages
@@ -358,7 +370,12 @@ impl Document {
                     .map(|r| Rot::from_degrees(rotation_degrees(r)))
                     .unwrap_or(Rot::D0),
                 has_annotations,
-                label: None,
+                // A label that only says the page's number is no label.
+                label: page
+                    .label()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty() && *l != (infos.len() + 1).to_string())
+                    .map(String::from),
             });
         }
 
@@ -607,11 +624,38 @@ mod tests {
     }
 
     #[test]
+    fn a_documents_own_page_labels_are_read_and_found() {
+        let _g = crate::testutil::pdfium_guard();
+        use lopdf::dictionary;
+        // Two pages of front matter in roman numerals, then 1, 2.
+        let mut lo = lopdf::Document::load_mem(&quark_edit::fixture::fixture(&["i", "ii", "One", "Two"])).unwrap();
+        let labels = dictionary! {
+            "Nums" => vec![
+                0.into(), dictionary! { "S" => "r" }.into(),
+                2.into(), dictionary! { "S" => "D" }.into(),
+            ],
+        };
+        let root = lo.trailer.get(b"Root").and_then(lopdf::Object::as_reference).unwrap();
+        lo.get_object_mut(root).and_then(lopdf::Object::as_dict_mut).unwrap().set("PageLabels", labels);
+        let path = testutil::tmp_path("labels.pdf");
+        lo.save(&path).unwrap();
+        let doc = Document::open(&path, None).unwrap();
+        let shown: Vec<String> = (0..4).map(|i| doc.info.page_label(i)).collect();
+        assert_eq!(shown, ["i", "ii", "1", "2"]);
+        assert!(doc.info.has_labels());
+        assert_eq!(doc.info.page_for_label("II"), Some(1));
+        assert_eq!(doc.info.page_for_label("1"), Some(2), "a label, not the page's number");
+        assert_eq!(doc.info.page_for_label("ix"), None);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn page_labels_default_to_one_based_numbers() {
         let _g = crate::testutil::pdfium_guard();
         let doc = Document::open(testutil::sample_pdf(), None).unwrap();
         assert_eq!(doc.info.page_label(0), "1");
         assert_eq!(doc.info.page_label(1), "2");
+        assert!(!doc.info.has_labels(), "numbers alone are no labels");
     }
 
     #[test]

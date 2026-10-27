@@ -127,12 +127,22 @@ pub struct Tab {
 
     /// Bumped whenever the view changes, so stale renders can be discarded.
     pub render_token: u64,
+    /// The display's pixels to a point — 2 on a Retina screen — as the
+    /// viewer last saw it: pages are drawn at it, so text is sharp.
+    pub pixels_per_point: f32,
+    /// How far the view has been pulled past the edge of the page shown,
+    /// when paged: far enough, and the page turns.
+    pull: f32,
     /// Redaction marks waiting to be applied: not comments of their own,
     /// so they are kept here rather than in the document. Every other
     /// annotation is a change to the document as soon as it is made.
     pub pending_annotations: Vec<Annotation>,
     next_annot_id: u64,
 }
+
+/// How far past the edge of a page, in points, the view must be pulled
+/// to turn it.
+const TURN_PULL: f32 = 140.0;
 
 /// What is written in place on the page.
 #[derive(Debug, Clone, PartialEq)]
@@ -260,6 +270,8 @@ impl Tab {
             forward_stack: Vec::new(),
             render_token: 1,
             pending_annotations: Vec::new(),
+            pixels_per_point: 1.0,
+            pull: 0.0,
             // Far above any object number, so a mark made here never
             // shares an id with an annotation read from the document.
             next_annot_id: 1 << 48,
@@ -320,6 +332,89 @@ impl Tab {
 
     pub fn clamp_scroll(&mut self) {
         self.scroll = self.layout.clamp_scroll(self.scroll, self.viewport);
+        // A page at a time: scrolling stays within the page or spread shown.
+        if let Some((top, bottom)) = self.band() {
+            self.scroll.y = self.scroll.y.clamp(top, bottom);
+        }
+    }
+
+    /// Whether pages are read one at a time (or one spread at a time), not
+    /// scrolled through.
+    pub fn paged(&self) -> bool {
+        !self.page_mode.is_continuous()
+    }
+
+    /// The row the current page is in.
+    fn current_row(&self) -> Option<usize> {
+        self.layout.page(self.current_page).map(|pb| pb.row)
+    }
+
+    /// When paged, how far the view may scroll: the shown row and its margin.
+    fn band(&self) -> Option<(f32, f32)> {
+        if !self.paged() {
+            return None;
+        }
+        let row = self.layout.rows.get(self.current_row()?)?;
+        let margin = self.layout_params().margin;
+        let top = (row.top - margin).max(0.0);
+        let bottom = (row.bottom + margin - self.viewport.y).max(top);
+        Some((top, bottom))
+    }
+
+    /// Whether a page is drawn: every page when scrolling through, only the
+    /// shown page or spread when paged.
+    pub fn shows(&self, page: usize) -> bool {
+        if !self.paged() {
+            return true;
+        }
+        let row = self.current_row();
+        self.layout.page(page).is_some_and(|pb| Some(pb.row) == row)
+    }
+
+    /// Turn to the next page or spread, or back: by rows when paged, by pages
+    /// when scrolling through. Going back by the wheel lands at the foot of
+    /// the page before, as if it had been scrolled up to.
+    pub fn turn(&mut self, by: i32, at_foot: bool) {
+        self.ensure_layout();
+        let to = if self.paged() {
+            let Some(row) = self.current_row() else { return };
+            let to = (row as i64 + i64::from(by)).clamp(0, self.layout.rows.len() as i64 - 1) as usize;
+            if to == row {
+                return;
+            }
+            self.layout.rows[to].first_page
+        } else {
+            (self.current_page as i64 + i64::from(by)).clamp(0, self.page_count() as i64 - 1).max(0) as usize
+        };
+        self.go_to_page(to);
+        if at_foot {
+            if let Some((_, bottom)) = self.band() {
+                self.scroll.y = bottom;
+            }
+        }
+    }
+
+    /// The wheel or trackpad moved the view. Paged, a pull past the edge of
+    /// the page shown — a deliberate one, not the end of a fling — turns it.
+    pub fn scroll_by(&mut self, delta: Vec2) {
+        let wanted = self.scroll + delta;
+        self.scroll = wanted;
+        self.clamp_scroll();
+        if !self.paged() {
+            self.sync_current_page();
+            return;
+        }
+        let over = wanted.y - self.scroll.y;
+        // Pulling the other way, or not at the edge, lets go.
+        if over == 0.0 || over.signum() != self.pull.signum() {
+            self.pull = 0.0;
+        }
+        self.pull += over;
+        if self.pull.abs() >= TURN_PULL {
+            let by = self.pull.signum() as i32;
+            self.pull = 0.0;
+            self.turn(by, by < 0);
+        }
     }
 
     /// The visible region in content space.
@@ -439,9 +534,10 @@ impl Tab {
         self.bump_token();
     }
 
-    /// Updates `current_page` from the scroll position.
+    /// Updates `current_page` from the scroll position. Paged, the page is
+    /// the one turned to, whatever the view shows of it.
     pub fn sync_current_page(&mut self) {
-        if self.info.page_count == 0 {
+        if self.info.page_count == 0 || self.paged() {
             return;
         }
         self.current_page = self.layout.dominant_page(self.view_rect());
@@ -519,6 +615,13 @@ impl Tab {
             .iter_mut()
             .chain(self.pending_annotations.iter_mut())
             .find(|a| a.id == id)
+    }
+
+    /// The scale pages are drawn at: the layout's, in the display's own
+    /// pixels. What a page's texture is kept under, too, so a window moved to
+    /// a screen of another density draws its pages again.
+    pub fn raster_scale(&self) -> f32 {
+        self.layout.scale * self.pixels_per_point
     }
 
     /// Whether there is anything unsaved.
@@ -963,5 +1066,81 @@ mod tests {
         locked.locked = true;
         t.annotations.push(locked);
         assert_eq!(t.writing_in(AnnotId(8)), None);
+    }
+
+    fn tab_in(mode: PageMode, pages: usize) -> Tab {
+        let mut t = Tab::new(1, info(pages), mode, ZoomMode::Custom(1.0));
+        t.viewport = Vec2::new(900.0, 700.0);
+        t.ensure_layout();
+        t
+    }
+
+    /// The wheel moved down by `dy` points, `times` over.
+    fn wheel(t: &mut Tab, dy: f32, times: usize) {
+        for _ in 0..times {
+            t.scroll_by(Vec2::new(0.0, dy));
+        }
+    }
+
+    #[test]
+    fn one_page_at_a_time_scrolls_within_the_page_and_a_pull_past_it_turns() {
+        let mut t = tab_in(PageMode::Single, 5);
+        // A letter page at 100 % is taller than the window: it scrolls, but
+        // never into the next.
+        let (_, foot) = t.band().unwrap();
+        assert!(foot > 40.0, "{foot}");
+        wheel(&mut t, 40.0, 1);
+        assert_eq!((t.current_page, t.scroll.y), (0, 40.0));
+        let to_foot = foot - t.scroll.y;
+        wheel(&mut t, to_foot, 1);
+        assert_eq!((t.current_page, t.scroll.y), (0, foot));
+        assert!(t.shows(0) && !t.shows(1), "only the page turned to is drawn");
+        // At its foot, a short pull is the end of a fling, not a turn.
+        wheel(&mut t, 40.0, 3);
+        assert_eq!(t.current_page, 0);
+        wheel(&mut t, 40.0, 1);
+        assert_eq!(t.current_page, 1, "pulled 160 points past the foot, it turns");
+        let (top, _) = t.band().unwrap();
+        assert_eq!(t.scroll.y, top, "the next page is shown from its top");
+        // Back: pulled past the top, the page before, shown from its foot.
+        wheel(&mut t, -40.0, 4);
+        assert_eq!(t.current_page, 0);
+        assert_eq!(t.scroll.y, t.band().unwrap().1);
+    }
+
+    #[test]
+    fn turning_goes_a_spread_at_a_time_and_stops_at_the_ends() {
+        let mut t = tab_in(PageMode::TwoUp, 5);
+        t.turn(1, false);
+        assert_eq!(t.current_page, 2, "the next spread's first page");
+        assert!(t.shows(2) && t.shows(3) && !t.shows(1) && !t.shows(4));
+        t.turn(1, false);
+        t.turn(1, false);
+        assert_eq!(t.current_page, 4, "the last spread, and no further");
+        t.turn(-5, false);
+        assert_eq!(t.current_page, 0);
+        // Scrolling through, a turn is a page.
+        let mut c = tab_in(PageMode::Continuous, 5);
+        c.turn(1, false);
+        assert_eq!(c.current_page, 1);
+        assert!(c.shows(4), "every page is drawn when scrolling through");
+    }
+
+    #[test]
+    fn scrolling_through_still_follows_the_page_on_screen() {
+        let mut t = tab_in(PageMode::Continuous, 5);
+        wheel(&mut t, 400.0, 6);
+        assert!(t.current_page >= 2, "{}", t.current_page);
+    }
+
+    #[test]
+    fn pages_are_drawn_in_the_displays_own_pixels() {
+        let mut t = tab(2);
+        let one = t.raster_scale();
+        assert_eq!(one, t.layout.scale);
+        t.pixels_per_point = 2.0;
+        assert_eq!(t.raster_scale(), 2.0 * one, "a Retina screen gets twice the pixels");
+        let key = |s: f32| crate::textures::PageKey::new(0, s, t.rotation, quark_core::prefs::PageTint::None);
+        assert_ne!(key(one), key(t.raster_scale()), "moved to another screen, a page is drawn again");
     }
 }

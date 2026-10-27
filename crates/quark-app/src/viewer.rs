@@ -46,6 +46,8 @@ pub enum ViewerAction {
     EditText(quark_core::annot::AnnotId),
     /// One, then the other.
     Then(Box<ViewerAction>, Box<ViewerAction>),
+    /// A link out of the document, to open in the browser.
+    OpenLink(String),
     /// A link was followed.
     GoToPage(usize),
 }
@@ -88,15 +90,19 @@ pub fn show(
     let mut action = handle_input(ui, tab, &response, canvas, tool, prefs);
 
     // --- request rasters for what is about to be visible ---
+    tab.pixels_per_point = ui.ctx().pixels_per_point();
     request_visible(tab, service, textures, prefs);
 
     // --- paint ---
     let origin = canvas.min - egui::vec2(tab.scroll.x, tab.scroll.y);
     let visible = tab.prerender_rect(prefs.prerender_pages);
+    // Paged, only the page or spread shown is drawn; its neighbours are
+    // still asked for above, so a turn shows the next at once.
     let page_boxes: Vec<_> = tab
         .layout
         .visible(visible)
         .into_iter()
+        .filter(|pb| tab.shows(pb.index))
         .map(|pb| (pb.index, pb.rect, pb.size))
         .collect();
 
@@ -113,7 +119,7 @@ pub fn show(
 
         paint_page_chrome(&painter, p, screen);
 
-        let key = PageKey::new(*index, tab.layout.scale, tab.rotation, prefs.tint);
+        let key = PageKey::new(*index, tab.raster_scale(), tab.rotation, prefs.tint);
         match textures.get_nearest(*index, &key) {
             Some(tex) => {
                 painter.add(
@@ -305,7 +311,7 @@ fn request_visible(
     textures: &mut TextureCache,
     prefs: &Prefs,
 ) {
-    let scale = tab.layout.scale * prefs.render_supersample.clamp(1.0, 3.0);
+    let scale = tab.raster_scale() * prefs.render_supersample.clamp(1.0, 3.0);
     let visible = tab.prerender_rect(prefs.prerender_pages);
     let pages: Vec<usize> = tab
         .layout
@@ -315,7 +321,7 @@ fn request_visible(
         .collect();
 
     for page in pages {
-        let key = PageKey::new(page, tab.layout.scale, tab.rotation, prefs.tint);
+        let key = PageKey::new(page, tab.raster_scale(), tab.rotation, prefs.tint);
         if textures.mark_pending(key, tab.render_token) {
             service.send(Request::Render {
                 id: tab.id,
@@ -779,9 +785,7 @@ fn handle_input(
                 }
             }
         } else if scroll_delta != egui::Vec2::ZERO {
-            tab.scroll = tab.scroll - Vec2::new(scroll_delta.x, scroll_delta.y);
-            tab.clamp_scroll();
-            tab.sync_current_page();
+            tab.scroll_by(Vec2::new(-scroll_delta.x, -scroll_delta.y));
             // Scrolling changes which pages are wanted, but not their scale, so
             // the token is left alone and existing textures stay valid.
         }
@@ -1012,6 +1016,18 @@ fn handle_select(
         }
     }
 
+    // A link says where it goes, and is a hand to point with.
+    if response.hovered() && !response.dragged() {
+        if let Some(link) = tab.links.iter().find(|l| l.page == page && l.rect.contains(page_pt)) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            let to = match &link.uri {
+                Some(uri) => uri.clone(),
+                None => format!("Page {}", tab.info.page_label(link.target_page)),
+            };
+            response.clone().on_hover_text_at_pointer(to);
+        }
+    }
+
     // A double-click on a note or text box writes in it.
     if response.double_clicked() {
         let hit = tab
@@ -1042,14 +1058,15 @@ fn handle_select(
         }
         tab.selected_annotation = None;
 
-        // A link under the pointer navigates. Links are read from the file and
-        // are never `dirty`, so they are not drawn — only acted on.
-        if let Some(target) = tab
-            .links
-            .iter()
-            .find(|l| l.page == page && l.rect.contains(page_pt) && l.uri.is_none())
-        {
-            return ViewerAction::GoToPage(target.target_page);
+        // A link under the pointer goes where it says: a page of this
+        // document, or a web address, opened in the browser. Links are read
+        // from the file and are never `dirty`, so they are not drawn — only
+        // acted on.
+        if let Some(link) = tab.links.iter().find(|l| l.page == page && l.rect.contains(page_pt)) {
+            return match &link.uri {
+                Some(uri) => ViewerAction::OpenLink(uri.clone()),
+                None => ViewerAction::GoToPage(link.target_page),
+            };
         }
 
         // A field under the pointer activates it.

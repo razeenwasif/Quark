@@ -48,6 +48,8 @@ pub enum Dialog {
     GoToPage {
         entry: String,
         max: usize,
+        /// Each page's label, when the document has its own.
+        labels: Vec<String>,
     },
     Properties {
         info: Box<DocInfo>,
@@ -176,9 +178,13 @@ impl Dialog {
                     });
                 }
 
-                Dialog::GoToPage { entry, max } => {
+                Dialog::GoToPage { entry, max, labels } => {
+                    let hint = match labels.first() {
+                        Some(first) => format!("Page label ({first}…) or number (1–{max})"),
+                        None => format!("Page number (1–{max})"),
+                    };
                     ui.label(
-                        RichText::new(format!("Page number (1–{max})"))
+                        RichText::new(hint)
                             .color(p.text_muted)
                             .size(12.0),
                     );
@@ -190,7 +196,7 @@ impl Dialog {
                     }
                     let submit =
                         field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let parsed = parse_page(entry, *max);
+                    let parsed = parse_page_or_label(entry, *max, labels);
                     if entry.trim().is_empty() {
                         // No complaint before anything has been typed.
                     } else if parsed.is_none() {
@@ -639,6 +645,16 @@ fn stamp_form(
 }
 
 /// Parses a one-based page number, returning a zero-based index.
+/// A page by its label — the document's own, when it has them — or else by
+/// its number. A book whose page 1 is the fifth page goes to the fifth.
+pub fn parse_page_or_label(entry: &str, max: usize, labels: &[String]) -> Option<usize> {
+    let wanted = entry.trim();
+    labels
+        .iter()
+        .position(|l| !wanted.is_empty() && l.eq_ignore_ascii_case(wanted))
+        .or_else(|| parse_page(entry, max))
+}
+
 pub fn parse_page(entry: &str, max: usize) -> Option<usize> {
     let n: usize = entry.trim().parse().ok()?;
     if n == 0 || n > max {
@@ -675,6 +691,11 @@ mod tests {
     #[test]
     fn page_entry_tolerates_surrounding_whitespace() {
         assert_eq!(parse_page("  4 ", 10), Some(3));
+        let labels: Vec<String> = ["i", "ii", "1", "2"].map(String::from).to_vec();
+        assert_eq!(parse_page_or_label("II", 4, &labels), Some(1));
+        assert_eq!(parse_page_or_label("1", 4, &labels), Some(2), "the label, not the first page");
+        assert_eq!(parse_page_or_label("4", 4, &labels), Some(3), "no such label: its number");
+        assert_eq!(parse_page_or_label("", 4, &labels), None);
     }
 
     #[test]
@@ -699,6 +720,7 @@ mod tests {
             Dialog::GoToPage {
                 entry: String::new(),
                 max: 1,
+                labels: Vec::new(),
             },
             Dialog::About,
             Dialog::Confirm {

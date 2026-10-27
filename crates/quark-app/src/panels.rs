@@ -34,8 +34,13 @@ pub enum PanelAction {
     Recolor { id: AnnotId, color: quark_core::annot::Color },
 }
 
-/// Thumbnail edge length in pixels.
+/// Thumbnail edge length in points.
 const THUMB_EDGE: u32 = 150;
+
+/// A thumbnail's long edge in the display's pixels, so it is sharp on Retina.
+pub(crate) fn thumb_edge(ctx: &egui::Context) -> u32 {
+    (THUMB_EDGE as f32 * ctx.pixels_per_point().clamp(1.0, 3.0)).round() as u32
+}
 
 pub fn show(
     ui: &mut Ui,
@@ -140,7 +145,8 @@ fn thumbnails(
                     // Thumbnails are cached under a page key at their own
                     // scale, so they never collide with the main view's
                     // textures for the same page.
-                    let scale = THUMB_EDGE as f32 / size.width.max(size.height).max(1.0);
+                    let edge = thumb_edge(ui.ctx());
+                    let scale = edge as f32 / size.width.max(size.height).max(1.0);
                     let key = PageKey::new(page, scale, quark_core::geom::Rot::D0, prefs.tint);
                     match textures.get(&key) {
                         Some(tex) => {
@@ -161,7 +167,7 @@ fn thumbnails(
                                 service.send(Request::Thumbnail {
                                     id: tab.id,
                                     page,
-                                    max_edge: THUMB_EDGE,
+                                    max_edge: edge,
                                     tint: prefs.tint,
                                     token: 0,
                                 });

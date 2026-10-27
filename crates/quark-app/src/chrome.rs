@@ -1160,6 +1160,8 @@ impl App {
     fn page_capsule(&mut self, ctx: &Context, p: &Palette, canvas: egui::Rect) {
         let Some(tab) = self.tab() else { return };
         let (page, count, scale) = (tab.current_page, tab.page_count(), tab.layout.scale);
+        // A page with a label of its own says it, its number after.
+        let label = tab.info.pages.get(page).and_then(|p| p.label.clone());
 
         egui::Area::new(egui::Id::new("page-capsule"))
             .order(egui::Order::Middle)
@@ -1178,10 +1180,14 @@ impl App {
                         ui.label(RichText::new("—").font(theme::strong(13.0)).color(p.text_faint));
                     } else {
                         ui.spacing_mut().item_spacing.x = 0.0;
+                        if let Some(label) = &label {
+                            ui.label(RichText::new(label).font(theme::heavy(13.0)).color(p.text));
+                            ui.label(RichText::new(" · ").font(theme::body(13.0)).color(p.text_faint));
+                        }
                         ui.label(
                             RichText::new((page + 1).to_string())
-                                .font(theme::heavy(13.0))
-                                .color(p.text),
+                                .font(if label.is_some() { theme::body(13.0) } else { theme::heavy(13.0) })
+                                .color(if label.is_some() { p.text_muted } else { p.text }),
                         );
                         ui.label(
                             RichText::new(format!(" / {count}"))
@@ -1899,16 +1905,15 @@ impl App {
             }
 
             // --- navigation ---
+            // A page on, or a spread on when two are shown at a time.
             Command::NextPage => {
                 if let Some(t) = self.tab_mut() {
-                    let next = (t.current_page + 1).min(t.page_count().saturating_sub(1));
-                    t.go_to_page(next);
+                    t.turn(1, false);
                 }
             }
             Command::PrevPage => {
                 if let Some(t) = self.tab_mut() {
-                    let prev = t.current_page.saturating_sub(1);
-                    t.go_to_page(prev);
+                    t.turn(-1, false);
                 }
             }
             Command::FirstPage => {
@@ -1924,9 +1929,15 @@ impl App {
             }
             Command::GoToPage(_) => {
                 if let Some(t) = self.tab() {
+                    let labels = if t.info.has_labels() {
+                        (0..t.page_count()).map(|i| t.info.page_label(i)).collect()
+                    } else {
+                        Vec::new()
+                    };
                     self.dialog = Some(Dialog::GoToPage {
                         entry: String::new(),
                         max: t.page_count().max(1),
+                        labels,
                     });
                 }
             }
@@ -2374,6 +2385,11 @@ impl App {
 
     fn handle_viewer_action(&mut self, action: ViewerAction, ctx: &Context) {
         match action {
+            ViewerAction::OpenLink(url) => {
+                if let Err(e) = open_link(&url) {
+                    self.toast(e, true);
+                }
+            }
             ViewerAction::Then(first, then) => {
                 self.handle_viewer_action(*first, ctx);
                 self.handle_viewer_action(*then, ctx);
@@ -2565,6 +2581,36 @@ impl App {
         t.selected_annotation = Some(id);
         t.editing = Some(editing);
     }
+}
+
+/// A web or mail address, handed to the browser or the mail app. Anything
+/// else a document links to — a file, a custom scheme, `javascript:` — is not
+/// for the desktop to run on a document's say-so.
+pub(crate) fn link_opens(url: &str) -> Result<&str, String> {
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    let web = lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:");
+    if !web || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!("Not opened — not a web address: {url}"));
+    }
+    Ok(url)
+}
+
+fn open_link(url: &str) -> Result<(), String> {
+    let url = link_opens(url)?;
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    // One argument, no shell: the address is never read as a command.
+    std::process::Command::new(program)
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Could not open {url}: {e}"))
 }
 
 /// The confirmation quitting with unsaved work puts up.
@@ -3240,6 +3286,16 @@ mod chrome_tests {
             assert_eq!(tilde(&home), "~");
         }
         assert_eq!(tilde(std::path::Path::new("/tmp")), "/tmp");
+    }
+
+    #[test]
+    fn only_web_and_mail_addresses_are_opened() {
+        assert_eq!(link_opens(" https://example.org/a?b=c "), Ok("https://example.org/a?b=c"));
+        assert!(link_opens("HTTP://example.org").is_ok());
+        assert!(link_opens("mailto:someone@example.org").is_ok());
+        for refused in ["file:///etc/passwd", "javascript:alert(1)", "smb://host/share", "/Applications/Calculator.app", "https://a.org/x y", "https://a.org/\nx"] {
+            assert!(link_opens(refused).is_err(), "{refused}");
+        }
     }
 
     #[test]
