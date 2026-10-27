@@ -278,4 +278,49 @@ mod tests {
         })
         .unwrap();
     }
+
+    #[test]
+    #[ignore = "draws pictures; run with QUARK_SHOTS set"]
+    fn shot_the_latex_editor() {
+        let Some(dir) = folder() else { return };
+        let root = std::env::temp_dir().join(format!("quark-shot-tex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("chapters")).unwrap();
+        std::fs::create_dir_all(root.join("figures")).unwrap();
+        std::fs::write(
+            root.join("main.tex"),
+            "\\documentclass[11pt]{article}\n\\usepackage{amsmath,graphicx}\n\\title{Notes on Sampling}\n\n\\begin{document}\n\\maketitle\n\n% What the estimator is, and why it works.\n\\section{Importance sampling}\\label{sec:is}\nWe draw $x_i \\sim q(x)$ and weight each by $w_i = p(x_i)/q(x_i)$, as in\n\\cite{owen2013}. The estimate is\n\\begin{equation}\n  \\hat{\\mu} = \\frac{1}{n}\\sum_{i=1}^{n} w_i f(x_i)\n  \\label{eq:is}\n\\end{equation}\nwhich is unbiased when $q > 0$ wherever $p f \\neq 0$.\n\n\\begin{itemize}\n\t\\item the weights can be heavy-tailed;\n\t\\item see Section~\\ref{sec:is} for the variance.\n\\end{itemize}\n\n\\input{chapters/variance}\n\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("chapters/variance.tex"), "\\section{Variance}\n").unwrap();
+        std::fs::write(root.join("refs.bib"), "@book{owen2013,}\n").unwrap();
+        for (dark, name) in [(true, "latex-dark.png"), (false, "latex-light.png")] {
+            let ctx = egui::Context::default();
+            theme::install_fonts(&ctx);
+            let mode = if dark { ThemeMode::Dark } else { ThemeMode::Light };
+            theme::apply(&ctx, mode);
+            let p = Palette::for_mode(mode);
+            let mut tex = crate::tex::TexProject::open(&root);
+            let s = &mut tex.session;
+            let keys = |s: &mut quark_modal::session::Session, text: &str| {
+                for c in text.chars() {
+                    s.key(&quark_modal::key::Key::char(c));
+                }
+            };
+            // Split, the second view on the equation; a search painted; a
+            // selection in the first.
+            s.key(&quark_modal::key::Key::ctrl('w'));
+            s.key(&quark_modal::key::Key::char('v'));
+            keys(s, "/sampl");
+            s.key(&quark_modal::key::Key::named("Enter"));
+            keys(s, "10G$");
+            shoot(&ctx, egui::vec2(1320.0, 820.0), 4, &dir.join(name), |ui| {
+                egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
+                    tex.show(ui, &p);
+                });
+            })
+            .unwrap();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

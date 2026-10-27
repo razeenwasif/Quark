@@ -52,6 +52,8 @@ pub(crate) enum Section {
     #[default]
     Books,
     Recent,
+    /// LaTeX projects.
+    Latex,
     Tools,
 }
 
@@ -61,6 +63,8 @@ pub(crate) enum Action {
     Open(PathBuf),
     Run(Command),
     Books(crate::books::BooksAction),
+    /// A LaTeX project opened again.
+    OpenTex(PathBuf),
 }
 
 /// One row of the recent list, with its filesystem facts already resolved.
@@ -256,7 +260,7 @@ pub(crate) fn show(ui: &mut Ui, p: &Palette, state: &mut HomeState, prefs: &Pref
     nav(&mut nav_ui, p, state);
 
     let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body_rect.shrink2(vec2(44.0, 36.0))));
-    body(&mut body_ui, p, state)
+    body(&mut body_ui, p, state, prefs)
 }
 
 /// The sections, and the drop hint at the foot.
@@ -279,6 +283,7 @@ fn nav(ui: &mut Ui, p: &Palette, state: &mut HomeState) {
     for (section, label, icon, count) in [
         (Section::Books, "Books", Icon::Bookmark, Some(books).filter(|n| *n > 0)),
         (Section::Recent, "Recent", Icon::Clock, Some(recent).filter(|n| *n > 0)),
+        (Section::Latex, "LaTeX", Icon::Text, None),
         (Section::Tools, "Tools", Icon::Grid, None),
     ] {
         if widgets::nav_item(ui, p, icon, label, state.section == section, count).clicked() {
@@ -364,7 +369,7 @@ fn rounded_outline(rect: Rect, radius: f32) -> Vec<egui::Pos2> {
 }
 
 /// The main column: heading, quick actions, then the selected section.
-fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState) -> Action {
+fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState, prefs: &Prefs) -> Action {
     let mut action = Action::None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -374,6 +379,7 @@ fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState) -> Action {
             ui.set_max_width(MAX_CONTENT.min(ui.available_width()));
             let (title, subtitle) = match state.section {
                 Section::Books => ("Books", "Every PDF in your folders, shelved by the folder it is in."),
+                Section::Latex => ("LaTeX", "A folder of sources, edited with Vim's keys."),
                 Section::Recent => ("Recent files", "Pick up where you left off, or start something new."),
                 Section::Tools => ("Tools", "Start a new document here, or open one to edit, export and sign it."),
             };
@@ -382,6 +388,11 @@ fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState) -> Action {
             ui.label(egui::RichText::new(subtitle).font(theme::body(13.5)).color(p.text_muted));
             ui.add_space(24.0);
 
+            if state.section == Section::Latex {
+                action = latex_projects(ui, p, prefs);
+                ui.add_space(20.0);
+                return;
+            }
             // The library is for reading: its shelves, not the tools.
             if state.section == Section::Books {
                 action = match crate::books::show(ui, p, &mut state.books) {
@@ -413,10 +424,49 @@ fn body(ui: &mut Ui, p: &Palette, state: &mut HomeState) -> Action {
                 }
                 Section::Tools => tools_note(ui, p),
                 // Drawn above, without the cards.
-                Section::Books => {}
+                Section::Books | Section::Latex => {}
             }
             ui.add_space(20.0);
         });
+    action
+}
+
+/// The LaTeX projects opened before, and a way to open another.
+fn latex_projects(ui: &mut Ui, p: &Palette, prefs: &Prefs) -> Action {
+    let mut action = Action::None;
+    if widgets::primary_button(ui, p, "Open a project…", true).clicked() {
+        action = Action::Run(Command::OpenTexProject);
+    }
+    ui.add_space(20.0);
+    if prefs.tex_projects.is_empty() {
+        ui.label(
+            egui::RichText::new("No projects yet. A project is a folder with a .tex file in it.")
+                .font(theme::body(12.5))
+                .color(p.text_muted),
+        );
+        return action;
+    }
+    for typed in &prefs.tex_projects {
+        let path = PathBuf::from(typed);
+        let name = path.file_name().map_or_else(|| typed.clone(), |n| n.to_string_lossy().into_owned());
+        let folder = path.parent().map(|d| quark_pdf::library::tilde(d)).unwrap_or_default();
+        let there = path.is_dir();
+        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().min(640.0), 48.0), Sense::click());
+        if response.hovered() && there {
+            ui.painter().rect_filled(rect, egui::CornerRadius::same(10), p.wash(0x0a));
+        }
+        ui.painter().text(rect.left_top() + vec2(14.0, 9.0), Align2::LEFT_TOP, name, theme::strong(13.5), if there { p.text } else { p.text_faint });
+        ui.painter().text(
+            rect.left_top() + vec2(14.0, 28.0),
+            Align2::LEFT_TOP,
+            if there { folder } else { format!("{folder} — not there now") },
+            theme::body(11.5),
+            p.text_faint,
+        );
+        if there && response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            action = Action::OpenTex(path);
+        }
+    }
     action
 }
 

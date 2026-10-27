@@ -67,6 +67,9 @@ pub struct App {
     pub(crate) home: crate::home::HomeState,
     /// The books in the person's folders, walked on a worker.
     pub(crate) library: quark_pdf::library::Library,
+    /// The LaTeX project open, and whether it is the surface showing.
+    pub(crate) tex: Option<crate::tex::TexProject>,
+    pub(crate) tex_visible: bool,
     /// Pages being read with OCR, behind the window.
     pub(crate) ocr: Option<crate::ocr::OcrRun>,
     /// A document as it was when OCR was asked for, while its pages and
@@ -145,6 +148,8 @@ impl App {
             library: library_kept(),
             ocr: None,
             ocr_prep: None,
+            tex: None,
+            tex_visible: false,
             last_side_panel: SidePanel::Thumbnails,
             palette_index: 0,
             palette_was_open: false,
@@ -291,14 +296,14 @@ impl App {
     /// match. The few handlers that reach for `self.active` directly rather
     /// than through here guard on `home.visible` themselves.
     pub(crate) fn tab(&self) -> Option<&Tab> {
-        if self.home.visible {
+        if !self.on_document() {
             return None;
         }
         self.tabs.get(self.active)
     }
 
     pub(crate) fn tab_mut(&mut self) -> Option<&mut Tab> {
-        if self.home.visible {
+        if !self.on_document() {
             return None;
         }
         self.tabs.get_mut(self.active)
@@ -306,8 +311,67 @@ impl App {
 
     /// Switches to home, keeping `active` where it was so leaving home again
     /// returns to the document the user was last reading.
+    /// Whether a document is the surface showing: not home, not LaTeX.
+    pub(crate) fn on_document(&self) -> bool {
+        !self.home.visible && !self.tex_visible
+    }
+
+    /// The LaTeX project, if one is open.
+    pub(crate) fn show_tex(&mut self) {
+        if self.tex.is_some() {
+            self.home.visible = false;
+            self.tex_visible = true;
+        }
+    }
+
+    /// Open the LaTeX project in `root`, in place of any open — which must
+    /// have nothing unsaved.
+    pub(crate) fn open_tex(&mut self, root: &std::path::Path) {
+        if let Some(open) = &self.tex {
+            if !open.unsaved().is_empty() {
+                self.toast(format!("{} has unsaved files — save them first", open.name()), true);
+                self.show_tex();
+                return;
+            }
+        }
+        if !root.is_dir() {
+            self.toast(format!("{} is not a folder", root.display()), true);
+            return;
+        }
+        self.tex = Some(crate::tex::TexProject::open(root));
+        let typed = root.display().to_string();
+        self.prefs.tex_projects.retain(|p| *p != typed);
+        self.prefs.tex_projects.insert(0, typed);
+        self.prefs.tex_projects.truncate(12);
+        save_prefs(&self.prefs);
+        self.show_tex();
+    }
+
+    /// Close the LaTeX project; unless forced, not with unsaved files.
+    pub(crate) fn close_tex(&mut self, force: bool) {
+        let Some(open) = &self.tex else { return };
+        let unsaved = open.unsaved();
+        if !force && !unsaved.is_empty() {
+            self.dialog = Some(Dialog::Confirm {
+                title: CLOSE_TEX.into(),
+                body: format!("{} has changes not saved. Close it anyway, and lose them?", unsaved.join(", ")),
+                confirm_label: "Close Without Saving".into(),
+                danger: true,
+            });
+            return;
+        }
+        self.tex = None;
+        if self.tex_visible {
+            self.tex_visible = false;
+            if self.tabs.is_empty() {
+                self.show_home();
+            }
+        }
+    }
+
     pub(crate) fn show_home(&mut self) {
         self.home.visible = true;
+        self.tex_visible = false;
         // Where the books just read were left.
         self.sync_books();
     }
@@ -335,6 +399,7 @@ impl App {
     pub(crate) fn show_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
             self.home.visible = false;
+            self.tex_visible = false;
             self.active = index;
         }
     }
@@ -816,6 +881,9 @@ pub(crate) fn reveal_hit(tab: &mut Tab, hit: &quark_core::search::SearchHit) {
         None => tab.go_to_page(hit.page),
     }
 }
+
+/// The confirmation closing a LaTeX project with unsaved files puts up.
+pub(crate) const CLOSE_TEX: &str = "Close Project";
 
 // --- preferences persistence ---
 

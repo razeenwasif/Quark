@@ -31,6 +31,10 @@ chrono.workspace = true
 quark-shell.workspace = true
 # OCR by tesseract, and later TeX.
 quark-lab.workspace = true
+# The LaTeX editor: Vim, and LaTeX's colours.
+quark-modal.workspace = true
+quark-syntax.workspace = true
+quark-text.workspace = true
 crossbeam-channel.workspace = true
 
 [dev-dependencies]

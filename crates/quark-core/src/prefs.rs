@@ -120,6 +120,8 @@ pub struct Prefs {
     pub library_folders: Vec<String>,
     /// The languages OCR last read in, as tesseract names them.
     pub ocr_langs: Vec<String>,
+    /// LaTeX projects opened, the last first.
+    pub tex_projects: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -158,6 +160,7 @@ impl Default for Prefs {
             ui_scale: 1.0,
             library_folders: vec!["~/Documents/Books".into()],
             ocr_langs: vec!["eng".into()],
+            tex_projects: Vec::new(),
         }
     }
 }

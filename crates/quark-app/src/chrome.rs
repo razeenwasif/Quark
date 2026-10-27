@@ -194,8 +194,14 @@ impl App {
         // Home first and always, with no close button — there is nothing to
         // close, and an X that does nothing invites the click anyway.
         let go_home = title_tab(ui, p, Icon::Home, "Home", self.home.visible, false, false).clicked;
+        // The LaTeX project, after home, while one is open.
+        let mut tex_hit = None;
+        if let Some(tex) = &self.tex {
+            let title = widgets::elide(&tex.name(), 26, true);
+            tex_hit = Some(title_tab(ui, p, Icon::Text, &title, self.tex_visible, !tex.unsaved().is_empty(), true));
+        }
         for (i, tab) in self.tabs.iter().enumerate() {
-            let active = !self.home.visible && i == self.active;
+            let active = self.on_document() && i == self.active;
             let title = widgets::elide(&tab.title(), 26, true);
             let hit = title_tab(ui, p, Icon::Document, &title, active, tab.has_unsaved_changes(), true);
             if hit.close {
@@ -221,6 +227,13 @@ impl App {
         if go_home {
             self.show_home();
         }
+        if let Some(hit) = tex_hit {
+            if hit.close {
+                self.close_tex(false);
+            } else if hit.clicked {
+                self.show_tex();
+            }
+        }
         if let Some(i) = to_select {
             self.show_tab(i);
             self.textures.clear();
@@ -232,6 +245,10 @@ impl App {
 
     /// Whether a command can run right now.
     fn command_enabled(&self, cmd: &Command, mutates: bool) -> bool {
+        // The LaTeX project's own: saving its file, closing it.
+        if self.tex_visible && matches!(cmd, Command::Save | Command::Close) {
+            return true;
+        }
         let Some(tab) = self.tab() else {
             // With nothing open, only the commands that do not need a document
             // are available.
@@ -247,6 +264,7 @@ impl App {
                     | Command::CombineFiles
                     | Command::CommandPalette
                     | Command::ToggleTheme
+                    | Command::OpenTexProject
             ) || matches!(cmd, Command::OpenRecent(_));
         };
         match cmd {
@@ -1357,7 +1375,7 @@ impl App {
         let ctx = &ui.ctx().clone();
         // Home carries its own islands, and the document panels have no
         // document to describe while it is showing.
-        if self.prefs.side_panel == SidePanel::None || self.tabs.is_empty() || self.home.visible {
+        if self.prefs.side_panel == SidePanel::None || self.tabs.is_empty() || !self.on_document() {
             return;
         }
         let which = self.prefs.side_panel;
@@ -1720,20 +1738,35 @@ impl App {
                     self.open_path(&PathBuf::from(r.path), None);
                 }
             }
+            Command::Save if self.tex_visible => {
+                if let Some(tex) = &mut self.tex {
+                    tex.save();
+                }
+            }
             Command::Save => self.save(false),
+            Command::OpenTexProject => {
+                let mut ask = rfd::FileDialog::new().set_title("Open a LaTeX project");
+                if let Some(dir) = self.prefs.tex_projects.first().and_then(|p| std::path::Path::new(p).parent()) {
+                    ask = ask.set_directory(dir);
+                }
+                if let Some(root) = ask.pick_folder() {
+                    self.open_tex(&root);
+                }
+            }
             Command::SaveAs | Command::SaveACopy => self.save(true),
             // Close acts on the surface being looked at, and home cannot be
             // closed. Without this guard Ctrl+W on the home screen would shut
             // a document the user cannot even see — `command_enabled` greys
             // these out in the menu and the palette, but keyboard shortcuts
             // reach `dispatch` directly.
+            Command::Close if self.tex_visible => self.close_tex(false),
             Command::Close => {
-                if !self.home.visible {
+                if self.on_document() {
                     self.close_tab(self.active);
                 }
             }
             Command::CloseAll => {
-                if !self.home.visible {
+                if self.on_document() {
                     while !self.tabs.is_empty() {
                         self.force_close_tab(0);
                     }
@@ -2453,6 +2486,7 @@ impl App {
                 Dialog::Confirm { title, .. } if title == "Close Without Saving" => {
                     self.force_close_tab(self.active);
                 }
+                Dialog::Confirm { title, .. } if title == crate::app::CLOSE_TEX => self.close_tex(true),
                 Dialog::Confirm { title, .. } if title == QUIT_UNSAVED => {
                     self.quit_confirmed = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -2744,7 +2778,10 @@ impl App {
         if self.quit_confirmed || !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
-        let unsaved: Vec<String> = self.tabs.iter().filter(|t| t.has_unsaved_changes()).map(|t| t.title()).collect();
+        let mut unsaved: Vec<String> = self.tabs.iter().filter(|t| t.has_unsaved_changes()).map(|t| t.title()).collect();
+        if let Some(tex) = &self.tex {
+            unsaved.extend(tex.unsaved());
+        }
         if unsaved.is_empty() {
             return;
         }
@@ -2823,7 +2860,16 @@ impl eframe::App for App {
         // typing a password would fire every accelerator it contains.
         if self.dialog.is_none() && !self.show_palette {
             let typing = ctx.memory(|m| m.focused().is_some());
-            if let Some(cmd) = ctx.input(|i| shortcuts::matched(i, &self.bindings)) {
+            // The LaTeX editor takes every key but ⌘'s chords, which stay
+            // Quark's: ⌘S, ⌘W, ⌘O, the palette.
+            let editing = self.tex_visible && !typing && self.tex.is_some();
+            if editing {
+                if let Some(tex) = &mut self.tex {
+                    tex.input(ctx);
+                }
+            }
+            let chord = ctx.input(|i| i.modifiers.mac_cmd || (!cfg!(target_os = "macos") && i.modifiers.command));
+            if let Some(cmd) = ctx.input(|i| shortcuts::matched(i, &self.bindings)).filter(|_| !editing || chord) {
                 // While text is being typed its keys are its own — ⌘A, ⌘C,
                 // ⌘Z, Delete — and only the file's own commands get past.
                 let filing = matches!(
@@ -2834,7 +2880,7 @@ impl eframe::App for App {
                     self.dispatch(cmd, ctx);
                 }
             }
-            if !typing {
+            if !typing && !editing {
                 if let Some(tool) = ctx.input(shortcuts::tool_shortcut) {
                     self.tool = tool;
                 }
@@ -2859,14 +2905,14 @@ impl eframe::App for App {
         // what remains between them.
         self.title_bar(ui, &p);
 
-        if !self.home.visible {
+        if self.on_document() {
             self.tool_dock(ui, &p);
         }
         self.side_panel(ui, &p);
         self.dock_panel(ui, &p);
 
-        let docked = !self.home.visible && self.dock_open && self.tab().is_some();
-        let well = if self.home.visible {
+        let docked = self.on_document() && self.dock_open && self.tab().is_some();
+        let well = if !self.on_document() {
             // Home draws its own islands inside this space.
             egui::Frame::new().outer_margin(egui::Margin {
                 left: GAP_I,
@@ -2891,10 +2937,18 @@ impl eframe::App for App {
         // panel has given back its borrow on `self`.
         let mut home_command: Option<Command> = None;
         let mut books_action = None;
+        let mut tex_open: Option<PathBuf> = None;
         let mut work_area = None;
         let action = egui::CentralPanel::default()
             .frame(well)
             .show(ui, |ui| {
+                if self.tex_visible {
+                    work_area = Some(ui.max_rect());
+                    if let Some(tex) = &mut self.tex {
+                        tex.show(ui, &p);
+                    }
+                    return ViewerAction::None;
+                }
                 if self.home.visible {
                     work_area = Some(ui.max_rect());
                     match crate::home::show(ui, &p, &mut self.home, &self.prefs) {
@@ -2905,6 +2959,7 @@ impl eframe::App for App {
                         crate::home::Action::Open(path) => self.startup_files.push(path),
                         crate::home::Action::Run(command) => home_command = Some(command),
                         crate::home::Action::Books(a) => books_action = Some(a),
+                        crate::home::Action::OpenTex(path) => tex_open = Some(path),
                     }
                     return ViewerAction::None;
                 }
@@ -2958,7 +3013,7 @@ impl eframe::App for App {
         if let Some(area) = work_area {
             // `show_status_bar` is the old name for this: the capsule is what
             // the status bar's page readout became.
-            if !self.home.visible && self.prefs.show_status_bar {
+            if self.on_document() && self.prefs.show_status_bar {
                 self.page_capsule(ctx, &p, area);
                 self.ocr_capsule(ctx, &p, area);
             }
@@ -2970,6 +3025,9 @@ impl eframe::App for App {
 
         if let Some(a) = books_action {
             self.books_action(a);
+        }
+        if let Some(root) = tex_open {
+            self.open_tex(&root);
         }
         self.tend_library(ctx);
         self.tend_ocr(ctx);

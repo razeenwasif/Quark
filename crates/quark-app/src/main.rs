@@ -13,6 +13,7 @@ mod app;
 mod assistant;
 mod books;
 mod chrome;
+mod code;
 mod dialogs;
 mod grid;
 mod home;
@@ -25,6 +26,7 @@ mod shortcuts;
 #[cfg(test)]
 mod shot;
 mod tab;
+mod tex;
 mod textures;
 mod viewer;
 
