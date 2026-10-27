@@ -178,6 +178,8 @@ pub(crate) struct TexProject {
     outline: (Option<PathBuf>, quark_tex::outline::Outline),
     /// The cite picker, while it is open.
     pub(crate) picker: Option<Picker>,
+    /// The visual editor, and whether it shows in place of the source.
+    pub visual: crate::texvisual::Visual,
 }
 
 /// The cite picker: what is typed, what was found, which is chosen.
@@ -295,6 +297,7 @@ impl TexProject {
             view: DockView::Pdf,
             outline: (None, Default::default()),
             picker: None,
+            visual: Default::default(),
         };
         project.read_outline();
         project.sync();
@@ -592,15 +595,86 @@ impl TexProject {
         self.root.file_name().map_or_else(|| self.root.display().to_string(), |n| n.to_string_lossy().into_owned())
     }
 
-    /// The files with changes not written.
+    /// The files with changes not written — typing in the visual editor
+    /// not yet in its file's source among them.
     pub(crate) fn unsaved(&self) -> Vec<String> {
-        self.session.unsaved()
+        let mut unsaved = self.session.unsaved();
+        let buffer = self.session.editor().buffer();
+        if self.visual.pending() && !buffer.is_modified() {
+            unsaved.push(buffer.name());
+        }
+        unsaved
     }
 
-    /// ⌘S: the file in focus written.
+    /// ⌘S: the file in focus written, with what is typed in it.
     pub(crate) fn save(&mut self) {
+        self.visual.flush(&mut self.session);
         let said = self.session.save();
         self.tell(said);
+    }
+
+    /// The visual editor shown, or the source at character `at` of the file
+    /// in focus (or where its cursor is).
+    pub(crate) fn set_visual(&mut self, on: bool, at: Option<usize>) {
+        if on == self.visual.on {
+            return;
+        }
+        self.popup.close();
+        if on {
+            // Typing in the source ends here, as one step to undo.
+            if self.session.mode() != VimMode::Normal {
+                let said = self.session.key(&Key::named("Escape"));
+                self.tell(said);
+            }
+        } else {
+            self.visual.flush(&mut self.session);
+            if let Some(at) = at {
+                self.session.put_cursor(at);
+            }
+        }
+        self.visual.on = on;
+    }
+
+    /// What the visual editor asked for.
+    fn visual_asked(&mut self, asked: crate::texvisual::Asked) {
+        use crate::texvisual::Asked;
+        match asked {
+            Asked::None => {}
+            Asked::Source(at) => self.set_visual(false, Some(at)),
+            Asked::Forward(at) => {
+                self.session.put_cursor(at);
+                self.view = DockView::Pdf;
+                self.forward = true;
+            }
+            Asked::Cite(at) => {
+                self.session.put_cursor(at);
+                self.open_picker();
+            }
+        }
+        if let Some(said) = self.visual.said.take() {
+            self.said = Some((said, true));
+        }
+    }
+
+    /// Keys while the visual editor shows and nothing in it is typed in:
+    /// its own, and the workspace's chords — never Vim's.
+    fn visual_input(&mut self, ctx: &egui::Context) {
+        let events = ctx.input(|i| i.events.clone());
+        for event in &events {
+            let egui::Event::Key { key, pressed: true, modifiers, .. } = event else { continue };
+            let command = modifiers.mac_cmd || modifiers.command;
+            match key {
+                egui::Key::E if command => self.set_visual(false, None),
+                egui::Key::Z if command => self.visual.undo(&mut self.session, modifiers.shift),
+                egui::Key::B if command => self.wants_build = true,
+                egui::Key::C if command && modifiers.shift => self.open_picker(),
+                egui::Key::Enter if command => {
+                    self.view = DockView::Pdf;
+                    self.forward = true;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// The server's word on the file in focus at the cursor's line, if any.
@@ -619,6 +693,9 @@ impl TexProject {
     /// Keys for the editor, as they came this frame; what it said kept for
     /// the status line, what it yanked put on the clipboard.
     pub(crate) fn input(&mut self, ctx: &egui::Context) {
+        if self.visual.on {
+            return self.visual_input(ctx);
+        }
         let events = ctx.input(|i| i.events.clone());
         let mut said = Vec::new();
         for event in &events {
@@ -632,6 +709,9 @@ impl TexProject {
                 }
                 egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.mac_cmd || modifiers.command => {
                     self.forward = true;
+                }
+                egui::Event::Key { key: egui::Key::E, pressed: true, modifiers, .. } if modifiers.mac_cmd || modifiers.command => {
+                    self.set_visual(true, None);
                 }
                 // ⌘C and ⌘X with a selection: yanked and deleted, so the
                 // clipboard gets it as `y` and `d` give it.
@@ -725,8 +805,17 @@ impl TexProject {
         let inner = editor.shrink(1.0);
         let status = Rect::from_min_max(pos2(inner.left(), inner.bottom() - STATUS_H), inner.max);
         let panes = Rect::from_min_max(inner.min, pos2(inner.right(), status.top()));
-        self.splits(ui, p, panes);
+        if self.visual.on {
+            let asked = self.visual.show(ui, p, &mut self.session, &self.root, panes);
+            self.visual_asked(asked);
+        } else {
+            self.splits(ui, p, panes);
+        }
         self.status_line(ui, p, status);
+        let switch = Rect::from_min_size(pos2(status.right() - 196.0, status.center().y - 10.0), vec2(116.0, 20.0));
+        if let Some(on) = crate::texvisual::switch(ui, p, switch, self.visual.on) {
+            self.set_visual(on, None);
+        }
         self.picker_sheet(ui, p);
         asked
     }
@@ -1148,6 +1237,7 @@ impl TexProject {
         }
         let mode = self.session.mode();
         let (label, fill) = match mode {
+            _ if self.visual.on => ("DOCUMENT", p.accent_alpha(0x90)),
             VimMode::Insert => ("INSERT", p.accent),
             VimMode::Replace => ("REPLACE", p.warning),
             VimMode::Visual => ("VISUAL", p.accent_alpha(0xb0)),

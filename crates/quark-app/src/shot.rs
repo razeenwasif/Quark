@@ -535,4 +535,54 @@ mod tests {
         drop(tex);
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    #[ignore = "draws pictures; run with QUARK_SHOTS set"]
+    fn shot_the_visual_editor() {
+        let Some(dir) = folder() else { return };
+        let root = std::env::temp_dir().join(format!("quark-shot-visual-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("figures")).unwrap();
+        // A plot to put in the figure: a curve over a grid.
+        let mut plot = image::RgbaImage::from_pixel(640, 300, image::Rgba([250, 250, 252, 255]));
+        for x in 0..640u32 {
+            let y = (150.0 - 110.0 * ((x as f32) / 70.0).sin() * (-(x as f32) / 500.0).exp()) as u32;
+            for dy in 0..3 {
+                plot.put_pixel(x, (y + dy).min(299), image::Rgba([40, 90, 200, 255]));
+            }
+            if x % 80 == 0 {
+                for y in 0..300 {
+                    plot.put_pixel(x, y, image::Rgba([220, 222, 228, 255]));
+                }
+            }
+        }
+        plot.save(root.join("figures/decay.png")).unwrap();
+        let main = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,graphicx}\n\\newcommand{\\E}{\\mathbb{E}}\n\\title{Notes on Sampling}\n\n\\begin{document}\n\\maketitle\n\n\\section{Importance sampling}\\label{sec:is}\nWe draw $x_i \\sim q(x)$ and weight each by $w_i = p(x_i)/q(x_i)$, as in\n\\cite{owen2013}. The \\emph{estimate} is \\textbf{unbiased} when $q > 0$ wherever $p f \\neq 0$; about 5\\% of draws carry most of the weight.\n\n\\begin{equation}\n  \\hat{\\mu} = \\frac{1}{n}\\sum_{i=1}^{n} w_i f(x_i)\n  \\label{eq:is}\n\\end{equation}\n\n\\subsection{What goes wrong}\nHeavy tails, mostly:\n\\begin{itemize}\n  \\item the weights can be \\emph{heavy-tailed};\n  \\item see Section~\\ref{sec:is} for the variance.\n\\end{itemize}\n\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=0.7\\linewidth]{figures/decay}\n  \\caption{The weights' tail, as $n$ grows.}\n\\end{figure}\n\n\\begin{tabular}{ll}\n  a & b \\\\\n\\end{tabular}\n\\end{document}\n";
+        std::fs::write(root.join("main.tex"), main).unwrap();
+        let ready = quark_lab::tex::TexState::Ready {
+            tinytex: "v2026.10".into(),
+            texlab: "v5.26.0".into(),
+            bundle: quark_lab::tex::Bundle::Full,
+            size: 241 << 20,
+            home: "/Users/you/.quark/tex".into(),
+        };
+        for (dark, name) in [(true, "visual-dark.png"), (false, "visual-light.png")] {
+            let ctx = egui::Context::default();
+            theme::install_fonts(&ctx);
+            let mode = if dark { ThemeMode::Dark } else { ThemeMode::Light };
+            theme::apply(&ctx, mode);
+            let p = Palette::for_mode(mode);
+            let mut tex = crate::tex::TexProject::open(&root);
+            tex.set_visual(true, None);
+            // The caret in the first paragraph, as a click puts it there.
+            tex.visual.caret_at = Some(main.find("We draw").map(|b| main[..b].chars().count()).unwrap());
+            shoot(&ctx, egui::vec2(1320.0, 860.0), 6, &dir.join(name), |ui| {
+                egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(12)).show(ui, |ui| {
+                    tex.show(ui, &p, Some(&ready), &mut crate::texdock::Dock::default(), None);
+                });
+            })
+            .unwrap();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
