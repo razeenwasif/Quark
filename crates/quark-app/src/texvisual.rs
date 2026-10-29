@@ -44,6 +44,12 @@ enum Drawn {
         tail: String,
     },
     Paragraph(Vec<Piece>),
+    /// An abstract: its words between `\\begin{abstract}` and its end.
+    Abstract {
+        head: String,
+        body: Vec<Piece>,
+        tail: String,
+    },
     Math,
     List {
         numbered: bool,
@@ -68,6 +74,10 @@ impl Drawn {
                 None => Drawn::Raw,
             },
             "paragraph" => texinline::parse(&block.text).map_or(Drawn::Raw, Drawn::Paragraph),
+            "abstract" => match texinline::abstract_body(&block.text) {
+                Some((head, body, tail)) => Drawn::Abstract { head, body, tail },
+                None => Drawn::Raw,
+            },
             "math" => Drawn::Math,
             "list" => {
                 let (numbered, items) = texinline::list_items(&block.text);
@@ -92,6 +102,7 @@ impl Drawn {
     fn pieces(&self) -> Option<&[Piece]> {
         match self {
             Drawn::Heading { title, .. } => Some(title),
+            Drawn::Abstract { body, .. } => Some(body),
             Drawn::Paragraph(pieces) => Some(pieces),
             _ => None,
         }
@@ -100,7 +111,7 @@ impl Drawn {
     /// Its source, with `pieces` for its words.
     fn written(&self, pieces: &[Piece]) -> Option<String> {
         match self {
-            Drawn::Heading { head, tail, .. } => {
+            Drawn::Heading { head, tail, .. } | Drawn::Abstract { head, tail, .. } => {
                 Some(format!("{head}{}{tail}", texinline::to_latex(pieces)))
             }
             Drawn::Paragraph(_) => Some(texinline::to_latex(pieces)),
@@ -111,7 +122,7 @@ impl Drawn {
     /// How far into its source its words begin.
     fn words_from(&self) -> usize {
         match self {
-            Drawn::Heading { head, .. } => head.chars().count(),
+            Drawn::Heading { head, .. } | Drawn::Abstract { head, .. } => head.chars().count(),
             _ => 0,
         }
     }
@@ -453,6 +464,24 @@ impl Visual {
                 ui.add_space(if strong { 6.0 } else { 8.0 });
                 asked
             }
+            Drawn::Abstract { .. } => {
+                // Set as article sets it: a small heading, the words a
+                // little smaller, in from either side.
+                ui.add_space(4.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new("Abstract").font(theme::strong(WORDS - 1.0)).color(p.text));
+                });
+                ui.add_space(4.0);
+                let inset = (width * 0.06).min(40.0);
+                let asked = ui
+                    .horizontal(|ui| {
+                        ui.add_space(inset);
+                        ui.vertical(|ui| self.editable(ui, p, session, i, width - 2.0 * inset, WORDS - 1.0, false)).inner
+                    })
+                    .inner;
+                ui.add_space(10.0);
+                asked
+            }
             Drawn::Math => self.equation_block(ui, p, session, i, width),
             Drawn::List { numbered, items } => {
                 let r = ui
@@ -557,7 +586,8 @@ impl Visual {
         strong: bool,
     ) -> Asked {
         let id = ui.id().with(("tex-visual-text", i));
-        let heading = matches!(self.drawn[i], Drawn::Heading { .. });
+        // One block whatever is typed: Return does not cut it in two.
+        let heading = matches!(self.drawn[i], Drawn::Heading { .. } | Drawn::Abstract { .. });
         let mine = self.typing.as_ref().filter(|t| t.block == i);
         let pieces: Vec<Piece> = match mine {
             Some(t) => t.pieces.clone(),
@@ -1096,6 +1126,7 @@ mod tests {
                 Drawn::Nothing => "nothing",
                 Drawn::Preamble => "preamble",
                 Drawn::Heading { .. } => "heading",
+                Drawn::Abstract { .. } => "abstract",
                 Drawn::Paragraph(_) => "paragraph",
                 Drawn::Math => "math",
                 Drawn::List { .. } => "list",

@@ -386,6 +386,36 @@ pub(crate) fn parse(src: &str) -> Option<Vec<Piece>> {
 
 /// A heading's source in three: the command up to its `{`, its title as
 /// pieces, and the rest from its `}` — or `None`.
+/// An abstract as a heading is: `\begin{abstract}` and the space after it,
+/// its words, and the space before `\end{abstract}` and that. None when its
+/// words would not come back exactly as they are — two paragraphs, say —
+/// and so are drawn as their source.
+pub(crate) fn abstract_body(src: &str) -> Option<(String, Vec<Piece>, String)> {
+    const OPEN: &str = "\\begin{abstract}";
+    const CLOSE: &str = "\\end{abstract}";
+    let lead = src.len() - src.trim_start().len();
+    if !src[lead..].starts_with(OPEN) {
+        return None;
+    }
+    let after_open = lead + OPEN.len();
+    let close = src.rfind(CLOSE)?;
+    if close < after_open {
+        return None;
+    }
+    let inner = &src[after_open..close];
+    let body = inner.trim();
+    if body.is_empty() || body.contains("\n\n") || body.contains("\n\r\n") {
+        return None;
+    }
+    let body_from = after_open + (inner.len() - inner.trim_start().len());
+    let body_to = body_from + body.len();
+    let pieces = parse(body)?;
+    if to_latex(&pieces) != body {
+        return None;
+    }
+    Some((src[..body_from].to_string(), pieces, src[body_to..].to_string()))
+}
+
 pub(crate) fn heading(src: &str) -> Option<(String, Vec<Piece>, String)> {
     let chars: Vec<char> = src.chars().collect();
     let mut i = chars.iter().take_while(|c| c.is_whitespace()).count();
@@ -857,6 +887,18 @@ pub(crate) fn caption(src: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_abstract_s_words_are_edited_and_written_back_exactly() {
+        let src = "\\begin{abstract}\nDetection of \\emph{chirps} within $1\\,$ms.\n\\end{abstract}\n";
+        let (head, body, tail) = abstract_body(src).unwrap();
+        assert_eq!(head, "\\begin{abstract}\n");
+        assert_eq!(tail, "\n\\end{abstract}\n");
+        assert_eq!(format!("{head}{}{tail}", to_latex(&body)), src);
+        // Two paragraphs are not one piece of text: drawn as source.
+        assert!(abstract_body("\\begin{abstract}\nOne.\n\nTwo.\n\\end{abstract}\n").is_none());
+        assert!(abstract_body("\\begin{abstract}\n\\end{abstract}\n").is_none());
+    }
 
     /// Pieces typed into as an edit box types: `new` drawn, caret after.
     fn type_in(src: &str, new: &str, caret: usize) -> String {

@@ -104,6 +104,64 @@ fn comment(line: &str) -> bool {
     line.trim_start().starts_with('%')
 }
 
+/// Commands that lead into a paragraph rather than standing apart from
+/// one: `\noindent\textbf{Keywords:} …` is a paragraph that begins without
+/// an indent, and `\smallskip` on the line before it is space above it.
+const LEAD_IN: &[&str] = &["noindent", "indent", "smallskip", "medskip", "bigskip", "vspace", "par"];
+
+/// Whether a line begins with lead-in commands only — `Some(true)` when text
+/// follows them on the line, `Some(false)` when they are all it holds.
+fn leads(line: &str) -> Option<bool> {
+    let mut rest = line.trim_start();
+    let mut any = false;
+    while let Some(after) = rest.strip_prefix('\\') {
+        let name: String = after.chars().take_while(char::is_ascii_alphabetic).collect();
+        if !LEAD_IN.contains(&name.as_str()) {
+            break;
+        }
+        let mut tail = after[name.len()..].strip_prefix('*').unwrap_or(&after[name.len()..]);
+        // `\vspace{1em}` takes its length with it.
+        if name == "vspace" {
+            let t = tail.trim_start();
+            let inner = t.strip_prefix('{')?;
+            tail = &inner[inner.find('}')? + 1..];
+        }
+        any = true;
+        rest = tail.trim_start();
+    }
+    any.then(|| !rest.trim().is_empty() && !rest.trim_start().starts_with('%'))
+}
+
+/// Where a paragraph that begins with lead-in commands at line `i` ends:
+/// lead-in lines first, then a line of text, then text up to a break. None
+/// when the lead-ins lead into no text — before a heading, say — and so
+/// stand alone after all.
+fn led_paragraph(lines: &[&str], i: usize, end: usize) -> Option<usize> {
+    leads(lines[i])?;
+    let mut j = i;
+    loop {
+        if j >= end {
+            return None;
+        }
+        match leads(lines[j]) {
+            Some(false) => j += 1,
+            Some(true) => {
+                j += 1;
+                break;
+            }
+            None if lines[j].trim().is_empty() || breaks(lines[j]) => return None,
+            None => {
+                j += 1;
+                break;
+            }
+        }
+    }
+    while j < end && !breaks(lines[j]) {
+        j += 1;
+    }
+    Some(j)
+}
+
 /// Whether a line is a command that stands alone.
 fn standing(line: &str) -> bool {
     let Some(rest) = line.trim_start().strip_prefix('\\') else {
@@ -136,6 +194,8 @@ fn kind_of(env: &str) -> &'static str {
         "list"
     } else if bare == "figure" || bare == "wrapfigure" {
         "figure"
+    } else if bare == "abstract" {
+        "abstract"
     } else if bare == "table" || bare == "tabular" || bare == "longtable" {
         "table"
     } else {
@@ -251,6 +311,9 @@ pub fn blocks(source: &str) -> Vec<Block> {
                 }
             }
             push(&mut out, "math", from, i, None);
+        } else if let Some(end) = led_paragraph(&lines, i, end_at) {
+            i = end;
+            push(&mut out, "paragraph", from, i, None);
         } else if comment(line) || standing(line) || t.starts_with("\\end{") {
             i += 1;
             while i < end_at && (comment(lines[i]) || standing(lines[i])) {
@@ -353,6 +416,43 @@ mod tests {
     use super::*;
 
     const DOC: &str = "\\documentclass{article}\n\\newcommand{\\R}{\\mathbb{R}}\n\\begin{document}\n\\maketitle\n\n\\section{Introduction}\n\\label{sec:intro}\nSome \\emph{text} over\ntwo lines, citing~\\cite{k}.\n\n% a note\n\\begin{equation}\n  x \\in \\R\n\\end{equation}\nThen more.\n\\[ y = 2 \\]\n\\begin{itemize}\n  \\item one\n  \\begin{itemize}\n    \\item nested\n  \\end{itemize}\n\\end{itemize}\n\\begin{figure}[ht]\n  \\includegraphics[width=0.5\\linewidth]{figures/plot.png}\n  \\caption{A plot.}\n\\end{figure}\n\\end{document}\n";
+
+    /// The kinds of a body's blocks, blank lines left out.
+    fn body_kinds(body: &str) -> Vec<(String, String)> {
+        let doc = format!("\\documentclass{{article}}\n\\begin{{document}}\n{body}\\end{{document}}\n");
+        let all = blocks(&doc);
+        assert_eq!(all.iter().map(|b| b.text.as_str()).collect::<String>(), doc, "the blocks join back");
+        all.into_iter()
+            .filter(|b| !matches!(b.kind.as_str(), "space" | "preamble" | "end"))
+            .map(|b| (b.kind, b.text.trim().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_paragraph_may_begin_with_lead_in_commands() {
+        let k = body_kinds("\\noindent\\textbf{Keywords:} TinyML; quantisation.\n\n\\smallskip\n\\noindent\\textbf{ACM CCS:} Computing\nmethodologies.\n\n\\vspace{1em}\nText after space.\n");
+        assert_eq!(
+            k,
+            vec![
+                ("paragraph".into(), "\\noindent\\textbf{Keywords:} TinyML; quantisation.".into()),
+                ("paragraph".into(), "\\smallskip\n\\noindent\\textbf{ACM CCS:} Computing\nmethodologies.".into()),
+                ("paragraph".into(), "\\vspace{1em}\nText after space.".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lead_ins_before_no_text_still_stand_alone() {
+        let k = body_kinds("\\smallskip\n\\section{Next}\n\\maketitle\n\\noindent % only a note\n\n");
+        let kinds: Vec<&str> = k.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(kinds, ["raw", "heading", "raw"]);
+    }
+
+    #[test]
+    fn an_abstract_is_a_block_of_its_own() {
+        let k = body_kinds("\\begin{abstract}\nWords.\n\\end{abstract}\n");
+        assert_eq!(k, vec![("abstract".into(), "\\begin{abstract}\nWords.\n\\end{abstract}".into())]);
+    }
 
     #[test]
     fn a_file_is_cut_into_blocks_that_join_back_into_it_exactly() {
