@@ -1240,3 +1240,39 @@ mod live {
         }
     }
 }
+
+/// The project that showed text running between panes, drawn as it was:
+/// `QUARK_SHOTS=<dir> QUARK_SHOT_PROJECT=<folder> cargo test -p quark-app
+/// texagent::repro -- --ignored`.
+#[cfg(test)]
+mod repro {
+    use quark_ui::theme::{self, Palette, ThemeMode};
+
+    #[test]
+    #[ignore = "draws a picture of a real project"]
+    fn shot_a_real_project() {
+        let (Some(dir), Some(root)) = (crate::shot::folder(), std::env::var_os("QUARK_SHOT_PROJECT").map(std::path::PathBuf::from)) else { return };
+        let ready = quark_lab::tex::TexState::Ready { tinytex: "v".into(), texlab: "v".into(), bundle: quark_lab::tex::Bundle::Full, size: 0, home: "/h".into() };
+        for (pane, name) in [(crate::texvisual::Pane::Visual, "real-visual.png"), (crate::texvisual::Pane::Both, "real-both.png")] {
+            let ctx = egui::Context::default();
+            theme::install_fonts(&ctx);
+            theme::apply(&ctx, ThemeMode::Dark);
+            let p = Palette::for_mode(ThemeMode::Dark);
+            let mut tex = crate::tex::TexProject::open(&root);
+            tex.set_pane(pane, None);
+            // A build's log, read as a build reads it, to see its entries fit.
+            if let Some(log) = std::env::var_os("QUARK_SHOT_LOG") {
+                let text = std::fs::read_to_string(log).unwrap();
+                let root_s = root.display().to_string();
+                tex.builds.log = Some(quark_tex::log::read(&text, &root_s, &root_s));
+                tex.view = crate::tex::DockView::Log;
+            }
+            crate::shot::shoot(&ctx, egui::vec2(1440.0, 860.0), 5, &dir.join(name), |ui| {
+                egui::CentralPanel::default().frame(egui::Frame::new().fill(p.ground).inner_margin(10)).show(ui, |ui| {
+                    tex.show(ui, &p, Some(&ready), &mut crate::texdock::Dock::default(), None);
+                });
+            })
+            .unwrap();
+        }
+    }
+}

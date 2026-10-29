@@ -93,6 +93,14 @@ fn seam(ui: &mut Ui, p: &Palette, salt: &str, rect: Rect) -> (f32, bool) {
     (r.drag_delta().x, r.double_clicked())
 }
 
+/// Text laid out on one line no wider than `width`, cut short with an
+/// ellipsis where it would run on — into the next island, or under a control.
+pub(crate) fn one_line(ui: &Ui, text: &str, font: egui::FontId, colour: egui::Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, colour);
+    job.wrap = egui::text::TextWrapping { max_width: width.max(8.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    ui.painter().layout_job(job)
+}
+
 /// A row of the file list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileRow {
@@ -934,6 +942,7 @@ impl TexProject {
         if let Some(a) = places.agent {
             theme::paint_island(&painter, a, p);
             let mut agent_ui = ui.new_child(egui::UiBuilder::new().max_rect(a.shrink2(vec2(10.0, 10.0))));
+            agent_ui.set_clip_rect(a.shrink(2.0));
             let cx = self.agent_context();
             let asks = crate::texagent::panel(&mut agent_ui, p, &mut self.agent, &mut self.session, &cx);
             self.agent_asks(asks);
@@ -942,6 +951,7 @@ impl TexProject {
         if let Some(state) = env {
             let ready = matches!(state, quark_lab::tex::TexState::Ready { .. });
             let mut side_ui = ui.new_child(egui::UiBuilder::new().max_rect(side.shrink2(vec2(14.0, 12.0))));
+            side_ui.set_clip_rect(side.shrink(2.0));
             if ready {
                 asked = self.dock(&mut side_ui, p, state, dock, pdf);
             } else {
@@ -956,10 +966,12 @@ impl TexProject {
         let outline_h = if self.outline.1.headings.is_empty() { 0.0 } else { (inner_files.height() * 0.45).min(360.0) };
         let list = Rect::from_min_max(inner_files.min, pos2(inner_files.right(), inner_files.bottom() - outline_h));
         let mut files_ui = ui.new_child(egui::UiBuilder::new().max_rect(list));
+        files_ui.set_clip_rect(files.shrink(2.0));
         self.file_list(&mut files_ui, p);
         if outline_h > 0.0 {
             let area = Rect::from_min_max(pos2(inner_files.left(), list.bottom() + 6.0), inner_files.max);
             let mut outline_ui = ui.new_child(egui::UiBuilder::new().max_rect(area));
+            outline_ui.set_clip_rect(files.shrink(2.0));
             self.outline_list(&mut outline_ui, p);
         }
 
@@ -1084,7 +1096,13 @@ impl TexProject {
                 } else {
                     (row.name.clone(), p.text_muted)
                 };
-                ui.painter().text(pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, text, theme::body(12.5), colour);
+                // Room for the unsaved dot at the right.
+                let galley = one_line(ui, &text, theme::body(12.5), colour, rect.right() - 20.0 - x);
+                let full = galley.elided;
+                ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, colour);
+                if full {
+                    response.clone().on_hover_text(&row.name);
+                }
                 if unsaved.iter().any(|u| quark_modal::root::Root::new(&self.root).same(u, &row.path)) {
                     ui.painter().circle_filled(pos2(rect.right() - 10.0, rect.center().y), 3.0, p.accent);
                 }
@@ -1119,9 +1137,10 @@ impl TexProject {
                 if response.hovered() {
                     ui.painter().rect_filled(rect, CornerRadius::same(5), p.wash(0x08));
                 }
-                let title = quark_ui::widgets::elide(&h.title, 34, false);
+                let x = rect.left() + 8.0 + indent;
                 let font = if h.level <= 2 { theme::strong(12.0) } else { theme::body(12.0) };
-                ui.painter().text(pos2(rect.left() + 8.0 + indent, rect.center().y), egui::Align2::LEFT_CENTER, title, font, p.text);
+                let galley = one_line(ui, &h.title, font, p.text, rect.right() - 6.0 - x);
+                ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, p.text);
                 if response.on_hover_text(format!("{}:{}", h.file, h.line)).clicked() {
                     go = Some((h.file.clone(), h.line));
                 }
@@ -1289,7 +1308,16 @@ impl TexProject {
                         Kind::Warning => code::severity_colour(quark_lsp::servers::Severity::Warning, p),
                         Kind::Box => p.text_faint,
                     };
-                    let place = match (&e.file, e.line) {
+                    // The project's files as it names them; TeX's own, from
+                    // deep in TinyTeX, by name alone.
+                    let shown = e.file.as_deref().map(|f| {
+                        if Path::new(f).is_absolute() {
+                            Path::new(f).file_name().map_or_else(|| f.to_string(), |n| n.to_string_lossy().into_owned())
+                        } else {
+                            f.to_string()
+                        }
+                    });
+                    let place = match (&shown, e.line) {
                         (Some(f), Some(l)) => format!("{f}:{l}"),
                         (Some(f), None) => f.clone(),
                         _ => String::new(),
@@ -1303,11 +1331,12 @@ impl TexProject {
                             ui.horizontal(|ui| {
                                 let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                                 ui.painter().circle_filled(dot.center(), 3.5, colour);
-                                ui.label(RichText::new(&place).font(code::font()).size(11.5).color(p.text_muted));
+                                ui.add(egui::Label::new(RichText::new(&place).font(code::font()).size(11.5).color(p.text_muted)).truncate())
+                                    .on_hover_text(&place);
                             });
-                            ui.label(RichText::new(&e.message).font(theme::body(12.5)).color(p.text));
+                            ui.add(egui::Label::new(RichText::new(&e.message).font(theme::body(12.5)).color(p.text)).wrap());
                             if let Some(context) = &e.context {
-                                ui.label(RichText::new(context).font(code::font()).size(11.5).color(p.text_faint));
+                                ui.add(egui::Label::new(RichText::new(context).font(code::font()).size(11.5).color(p.text_faint)).truncate());
                             }
                         })
                         .response
@@ -1484,11 +1513,21 @@ impl TexProject {
             None => buffer.name(),
         };
         let file = format!("{name}{}", if buffer.is_modified() { "  •" } else { "" });
-        painter.text(pos2(pill_rect.right() + 10.0, mid), egui::Align2::LEFT_CENTER, file, theme::body(12.0), p.text_muted);
+        // Clear of the pane switch, which sits 250 points in from the right.
+        let x = pill_rect.right() + 10.0;
+        let galley = one_line(ui, &file, theme::body(12.0), p.text_muted, rect.right() - 262.0 - x);
+        let name_right = x + galley.size().x;
+        painter.galley(pos2(x, mid - galley.size().y / 2.0), galley, p.text_muted);
         // What was said last, or else the server's word on this line.
         if let Some((text, warn)) = self.said.clone().or_else(|| self.diagnostic_here()) {
-            let text = quark_ui::widgets::elide(&text, 90, false);
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, theme::body(12.0), if warn { p.warning } else { p.text_faint });
+            // Between the file's name and the switch, when there is room.
+            let room = rect.right() - 262.0 - name_right - 24.0;
+            if room > 60.0 {
+                let colour = if warn { p.warning } else { p.text_faint };
+                let galley = one_line(ui, &text, theme::body(12.0), colour, room);
+                let x = (name_right + 12.0).max(rect.center().x - galley.size().x / 2.0).min(rect.right() - 262.0 - 12.0 - galley.size().x);
+                painter.galley(pos2(x, mid - galley.size().y / 2.0), galley, colour);
+            }
         }
         let at = buffer.position(buffer.cursor.offset);
         let place = format!("{}:{}", at.line + 1, at.column + 1);
